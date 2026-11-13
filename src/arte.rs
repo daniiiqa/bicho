@@ -238,7 +238,10 @@ pub enum Pose {
     /// en el aire: patas colgando
     Brinca,
     /// pegado a la pared; `pared_der`: la pared le queda a la derecha
-    Trepa { paso: bool, pared_der: bool },
+    Trepa {
+        paso: bool,
+        pared_der: bool,
+    },
 }
 
 pub struct Look {
@@ -258,7 +261,9 @@ pub struct Look {
 /// Cierra los ojos: con ojos de dos renglones el de arriba se vuelve cuerpo
 /// y el de abajo una rayita; con uno, rayita.
 fn cierra(filas: &mut [Vec<char>]) {
-    let con_ojo: Vec<usize> = (0..filas.len()).filter(|&i| filas[i].contains(&'w')).collect();
+    let con_ojo: Vec<usize> = (0..filas.len())
+        .filter(|&i| filas[i].contains(&'w'))
+        .collect();
     for (k, &i) in con_ojo.iter().enumerate() {
         for c in filas[i].iter_mut() {
             *c = match *c {
@@ -272,7 +277,9 @@ fn cierra(filas: &mut [Vec<char>]) {
 
 fn cuerpo(e: &Especie, pose: Pose, parpadeo: bool, forma: Forma) -> Bloque {
     let (otro, patas) = match pose {
-        Pose::Camina(paso) | Pose::Trepa { paso, .. } => (paso, Some(if paso { e.patas_b } else { e.patas_a })),
+        Pose::Camina(paso) | Pose::Trepa { paso, .. } => {
+            (paso, Some(if paso { e.patas_b } else { e.patas_a }))
+        }
         Pose::Parado => (false, Some(e.patas_a)),
         Pose::Brinca => (!e.brinca, Some(e.patas_b)),
         Pose::Sentado | Pose::Duerme => (false, None),
@@ -286,7 +293,11 @@ fn cuerpo(e: &Especie, pose: Pose, parpadeo: bool, forma: Forma) -> Bloque {
         (_, _, Some(b)) if otro => b,
         _ => e.cuerpo,
     };
-    let mut filas: Vec<Vec<char>> = base.iter().chain(patas.unwrap_or(&[])).map(|f| f.chars().collect()).collect();
+    let mut filas: Vec<Vec<char>> = base
+        .iter()
+        .chain(patas.unwrap_or(&[]))
+        .map(|f| f.chars().collect())
+        .collect();
     if parpadeo || pose == Pose::Duerme {
         cierra(&mut filas);
     }
@@ -332,7 +343,11 @@ fn sello(g: &mut Grid, dibujo: &[&str], col: i32, renglon: i32, color: u8) {
     for (dy, f) in dibujo.iter().enumerate() {
         for (dx, c) in f.chars().enumerate() {
             let (x, y) = (col + dx as i32, renglon + dy as i32);
-            if c != '.' && (0..ANCHO as i32).contains(&x) && (0..ALTO as i32).contains(&y) && g[y as usize][x as usize] == 0 {
+            if c != '.'
+                && (0..ANCHO as i32).contains(&x)
+                && (0..ALTO as i32).contains(&y)
+                && g[y as usize][x as usize] == 0
+            {
                 g[y as usize][x as usize] = color;
             }
         }
@@ -345,7 +360,9 @@ const NOTA_DIBUJO: [&str; 4] = ["..xx", "..x.", "xxx.", "xx.."];
 
 /// Primer renglón con algo del cuerpo (para poner cosas encima).
 fn tope(g: &Grid) -> i32 {
-    g.iter().position(|f| f.iter().any(|&c| c != 0)).unwrap_or(AIRE) as i32
+    g.iter()
+        .position(|f| f.iter().any(|&c| c != 0))
+        .unwrap_or(AIRE) as i32
 }
 
 pub fn grid(e: &Especie, look: &Look) -> Grid {
@@ -365,22 +382,46 @@ pub fn grid(e: &Especie, look: &Look) -> Grid {
     let tope = tope(&g);
 
     // lo de arriba se pinta del lado de la cabeza
-    let lado = |col: i32, w: i32| if look.derecha { col } else { ANCHO as i32 - col - w };
+    let lado = |col: i32, w: i32| {
+        if look.derecha {
+            col
+        } else {
+            ANCHO as i32 - col - w
+        }
+    };
     if let Some(p) = look.corazon {
         let sube = (p * 4.0) as i32;
-        sello(&mut g, &CORAZON_DIBUJO, lado(9, 5), (tope - 4).min(3) - sube, CORAZON);
+        sello(
+            &mut g,
+            &CORAZON_DIBUJO,
+            lado(9, 5),
+            (tope - 4).min(3) - sube,
+            CORAZON,
+        );
     }
     if let Some(t) = look.zzz {
         // dos zetas que suben y se van, desfasadas
         for (k, col) in [(0.0, 11), (0.5, 8)] {
             let f = (t * 0.6 + k) % 1.0;
-            sello(&mut g, &Z_DIBUJO, lado(col + (f * 3.0) as i32, 3), tope.min(7) - (f * 8.0) as i32, ZZZ);
+            sello(
+                &mut g,
+                &Z_DIBUJO,
+                lado(col + (f * 3.0) as i32, 3),
+                tope.min(7) - (f * 8.0) as i32,
+                ZZZ,
+            );
         }
     }
     if let Some(t) = look.notas {
         for (k, col) in [(0.0, 1), (0.5, 11)] {
             let f = (t * 0.5 + k) % 1.0;
-            sello(&mut g, &NOTA_DIBUJO, col + ((f * 6.0).sin() * 1.5) as i32, tope.min(6) - (f * 7.0) as i32, ZZZ);
+            sello(
+                &mut g,
+                &NOTA_DIBUJO,
+                col + ((f * 6.0).sin() * 1.5) as i32,
+                tope.min(6) - (f * 7.0) as i32,
+                ZZZ,
+            );
         }
     }
     g
@@ -444,8 +485,17 @@ mod tests {
     #[test]
     fn dibujos_de_16() {
         for e in TODAS {
-            let bl = e.blanda.map(|b| [b.ancha, b.aplastada, b.plasta, b.alta, b.estirada].concat()).unwrap_or_default();
-            let todas = e.cuerpo.iter().chain(e.cuerpo_b.unwrap_or(&[])).chain(e.patas_a).chain(e.patas_b).chain(&bl);
+            let bl = e
+                .blanda
+                .map(|b| [b.ancha, b.aplastada, b.plasta, b.alta, b.estirada].concat())
+                .unwrap_or_default();
+            let todas = e
+                .cuerpo
+                .iter()
+                .chain(e.cuerpo_b.unwrap_or(&[]))
+                .chain(e.patas_a)
+                .chain(e.patas_b)
+                .chain(&bl);
             for f in todas {
                 assert_eq!(f.chars().count(), ANCHO, "{}: {f}", e.nombre);
             }
@@ -455,7 +505,18 @@ mod tests {
 
     #[test]
     fn trepando_las_patas_tocan_la_pared() {
-        let look = |pared_der| Look { pose: Pose::Trepa { paso: false, pared_der }, derecha: true, parpadeo: false, corazon: None, zzz: None, notas: None, forma: Forma::Normal };
+        let look = |pared_der| Look {
+            pose: Pose::Trepa {
+                paso: false,
+                pared_der,
+            },
+            derecha: true,
+            parpadeo: false,
+            corazon: None,
+            zzz: None,
+            notas: None,
+            forma: Forma::Normal,
+        };
         for e in TODAS {
             let g = grid(e, &look(true));
             assert!(g.iter().any(|f| f[ANCHO - 1] != 0), "{}", e.nombre);
@@ -467,8 +528,20 @@ mod tests {
     #[test]
     fn dormido_cierra_los_ojos() {
         for e in TODAS {
-            let look = Look { pose: Pose::Duerme, derecha: true, parpadeo: false, corazon: None, zzz: None, notas: None, forma: Forma::Normal };
-            assert!(!grid(e, &look).iter().flatten().any(|&c| c == OJO), "{}", e.nombre);
+            let look = Look {
+                pose: Pose::Duerme,
+                derecha: true,
+                parpadeo: false,
+                corazon: None,
+                zzz: None,
+                notas: None,
+                forma: Forma::Normal,
+            };
+            assert!(
+                !grid(e, &look).iter().flatten().any(|&c| c == OJO),
+                "{}",
+                e.nombre
+            );
         }
     }
 }

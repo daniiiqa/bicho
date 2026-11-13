@@ -10,12 +10,21 @@ use std::time::Duration;
 fn socket() -> Option<PathBuf> {
     let sig = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
     let run = std::env::var_os("XDG_RUNTIME_DIR")?;
-    Some(PathBuf::from(run).join("hypr").join(sig).join(".socket.sock"))
+    Some(
+        PathBuf::from(run)
+            .join("hypr")
+            .join(sig)
+            .join(".socket.sock"),
+    )
 }
 
 pub fn pide(cmd: &str) -> Value {
-    let Some(path) = socket() else { return Value::Null };
-    let Ok(mut s) = UnixStream::connect(path) else { return Value::Null };
+    let Some(path) = socket() else {
+        return Value::Null;
+    };
+    let Ok(mut s) = UnixStream::connect(path) else {
+        return Value::Null;
+    };
     let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
     if s.write_all(format!("j/{cmd}").as_bytes()).is_err() {
         return Value::Null;
@@ -30,7 +39,12 @@ fn f(v: &Value) -> f32 {
 }
 
 pub fn monitor_enfocado() -> Option<String> {
-    pide("monitors").as_array()?.iter().find(|m| m["focused"].as_bool() == Some(true))?["name"].as_str().map(String::from)
+    pide("monitors")
+        .as_array()?
+        .iter()
+        .find(|m| m["focused"].as_bool() == Some(true))?["name"]
+        .as_str()
+        .map(String::from)
 }
 
 /// Una ventana, en coordenadas del monitor del bicho (lógicas).
@@ -55,10 +69,17 @@ pub struct Mundo {
 
 pub fn mundo(monitor: &str, borde: f32) -> Mundo {
     let mons = pide("monitors");
-    let Some(m) = mons.as_array().and_then(|a| a.iter().find(|m| m["name"] == monitor)) else { return Mundo::default() };
+    let Some(m) = mons
+        .as_array()
+        .and_then(|a| a.iter().find(|m| m["name"] == monitor))
+    else {
+        return Mundo::default();
+    };
     let (mx, my) = (f(&m["x"]), f(&m["y"]));
     let ws = m["activeWorkspace"]["id"].as_i64();
-    let especial = m["specialWorkspace"]["name"].as_str().filter(|s| !s.is_empty());
+    let especial = m["specialWorkspace"]["name"]
+        .as_str()
+        .filter(|s| !s.is_empty());
     // con el scratchpad abierto se para sobre ese; si no, sobre el normal
     let cuenta = |c: &Value| match especial {
         Some(e) => c["workspace"]["name"].as_str() == Some(e),
@@ -69,7 +90,9 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|c| c["mapped"].as_bool() == Some(true) && c["hidden"].as_bool() != Some(true) && cuenta(c))
+        .filter(|c| {
+            c["mapped"].as_bool() == Some(true) && c["hidden"].as_bool() != Some(true) && cuenta(c)
+        })
         // en pantalla completa no hay de dónde agarrarse
         .filter(|c| c["fullscreen"].as_i64().unwrap_or(0) == 0)
         .map(|c| Ventana {
@@ -80,15 +103,23 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
             h: f(&c["size"][1]),
         })
         .collect();
-    Mundo { ventanas, abajo: f(&m["reserved"][3]), borde, origen: (mx, my) }
+    Mundo {
+        ventanas,
+        abajo: f(&m["reserved"][3]),
+        borde,
+        origen: (mx, my),
+    }
 }
 
 pub fn borde() -> f32 {
-    pide("getoption general:border_size")["int"].as_f64().unwrap_or(2.0) as f32
+    pide("getoption general:border_size")["int"]
+        .as_f64()
+        .unwrap_or(2.0) as f32
 }
 
 /// El cursor en coordenadas del monitor que empieza en `origen`.
 pub fn cursor(origen: (f32, f32)) -> Option<(f32, f32)> {
     let c = pide("cursorpos");
-    c.is_object().then(|| (f(&c["x"]) - origen.0, f(&c["y"]) - origen.1))
+    c.is_object()
+        .then(|| (f(&c["x"]) - origen.0, f(&c["y"]) - origen.1))
 }

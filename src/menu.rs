@@ -30,7 +30,12 @@ fn icono(especie: &str) -> &'static str {
 fn es() -> bool {
     std::fs::read_to_string(super::home(".config/hypr/discada.conf"))
         .ok()
-        .and_then(|s| s.lines().find_map(|l| l.strip_prefix("LANGUAGE=").map(|v| v.split_whitespace().next().unwrap_or("").to_string())))
+        .and_then(|s| {
+            s.lines().find_map(|l| {
+                l.strip_prefix("LANGUAGE=")
+                    .map(|v| v.split_whitespace().next().unwrap_or("").to_string())
+            })
+        })
         .is_some_and(|v| v == "es")
 }
 
@@ -53,7 +58,10 @@ fn cfg_path() -> PathBuf {
 }
 
 fn lee() -> Value {
-    let v: Value = std::fs::read(cfg_path()).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or(Value::Null);
+    let v: Value = std::fs::read(cfg_path())
+        .ok()
+        .and_then(|d| serde_json::from_slice(&d).ok())
+        .unwrap_or(Value::Null);
     if v.is_object() { v } else { json!({}) }
 }
 
@@ -72,14 +80,29 @@ fn pick(prompt: &str, mesg: &str, filas: &[String], fila: usize) -> Option<usize
     let jale = super::home(".local/bin/jale");
     let rasi = super::home(".config/jale/config-edit.rasi");
     let mut cmd = Command::new(&jale);
-    cmd.args(["-dmenu", "-i", "-format", "i", "-no-custom", "-p", prompt, "-selected-row", &fila.to_string()]);
+    cmd.args([
+        "-dmenu",
+        "-i",
+        "-format",
+        "i",
+        "-no-custom",
+        "-p",
+        prompt,
+        "-selected-row",
+        &fila.to_string(),
+    ]);
     if rasi.exists() {
         cmd.arg("-config").arg(&rasi);
     }
     if !mesg.is_empty() {
         cmd.args(["-mesg", mesg]);
     }
-    let mut hijo = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut hijo = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
     if let Some(mut entrada) = hijo.stdin.take() {
         let _ = entrada.write_all(filas.join("\n").as_bytes());
     }
@@ -100,7 +123,14 @@ fn pets(v: &Value) -> Vec<String> {
     if let Some(sueltos) = super::andando() {
         return sueltos;
     }
-    v["pets"].as_array().map(|a| a.iter().filter_map(|p| p.as_str().map(String::from)).collect()).unwrap_or_else(|| vec!["bicho".into()])
+    v["pets"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_else(|| vec!["bicho".into()])
 }
 
 /// Si andan sueltos, que tomen la config nueva.
@@ -126,17 +156,38 @@ pub fn menu() -> i32 {
         let baila = v["dance"].as_bool().unwrap_or(true);
         let login = v["login"].as_bool().unwrap_or(false);
         let filas = vec![
-            format!("{I_POWER}  {}", if sueltos { l.t("andan sueltos — guardarlos", "out and about — put away") } else { l.t("guardados — soltarlos", "put away — let them out") }),
+            format!(
+                "{I_POWER}  {}",
+                if sueltos {
+                    l.t("andan sueltos — guardarlos", "out and about — put away")
+                } else {
+                    l.t("guardados — soltarlos", "put away — let them out")
+                }
+            ),
             format!("{I_PAW}  {}: {} ›", l.t("quiénes", "who"), lista.join(", ")),
             format!("{I_SPEED}  {}: {vel}×", l.t("velocidad", "speed")),
             format!("{I_SIZE}  {}: {tam}", l.t("tamaño", "size")),
-            format!("{I_LADDER}  {}: {}", l.t("trepan ventanas", "climb windows"), l.si(trepa)),
-            format!("{I_MUSIC}  {}: {}", l.t("bailan con música", "dance to music"), l.si(baila)),
-            format!("{I_LOGIN}  {}: {}", l.t("al iniciar sesión", "at login"), l.si(login)),
+            format!(
+                "{I_LADDER}  {}: {}",
+                l.t("trepan ventanas", "climb windows"),
+                l.si(trepa)
+            ),
+            format!(
+                "{I_MUSIC}  {}: {}",
+                l.t("bailan con música", "dance to music"),
+                l.si(baila)
+            ),
+            format!(
+                "{I_LOGIN}  {}: {}",
+                l.t("al iniciar sesión", "at login"),
+                l.si(login)
+            ),
             format!("‹ {}", l.t("cerrar", "close")),
         ];
         let mesg = l.t("los animalitos de discada", "discada's little critters");
-        let Some(i) = pick("bicho", mesg, &filas, fila) else { return 0 };
+        let Some(i) = pick("bicho", mesg, &filas, fila) else {
+            return 0;
+        };
         fila = i;
         match i {
             0 => {
@@ -181,12 +232,24 @@ fn quienes(l: &L) {
     loop {
         let mut v = lee();
         let mut lista = pets(&v);
-        let mut filas: Vec<String> = lista.iter().map(|p| format!("{I_MENOS}  {} {}  {p}", l.t("quitar", "remove"), icono(p))).collect();
+        let mut filas: Vec<String> = lista
+            .iter()
+            .map(|p| format!("{I_MENOS}  {} {}  {p}", l.t("quitar", "remove"), icono(p)))
+            .collect();
         let nuevos: Vec<&str> = crate::arte::TODAS.iter().map(|e| e.nombre).collect();
-        filas.extend(nuevos.iter().map(|p| format!("{I_MAS}  {} {}  {p}", l.t("agregar", "add"), icono(p))));
+        filas.extend(
+            nuevos
+                .iter()
+                .map(|p| format!("{I_MAS}  {} {}  {p}", l.t("agregar", "add"), icono(p))),
+        );
         filas.push(format!("‹ {}", l.t("volver", "back")));
-        let mesg = l.t("puedes repetir: tres michis, por qué no", "repeats are fine: why not three cats");
-        let Some(i) = pick(l.t("quiénes", "who"), mesg, &filas, fila) else { return };
+        let mesg = l.t(
+            "puedes repetir: tres michis, por qué no",
+            "repeats are fine: why not three cats",
+        );
+        let Some(i) = pick(l.t("quiénes", "who"), mesg, &filas, fila) else {
+            return;
+        };
         fila = i;
         if i < lista.len() {
             // siempre queda uno

@@ -26,8 +26,14 @@ enum Hace {
     Sienta,
     Duerme,
     /// camina hasta el lado de la ventana para treparla
-    VaATrepar { ventana: String, pared_der: bool },
-    Trepa { ventana: String, pared_der: bool },
+    VaATrepar {
+        ventana: String,
+        pared_der: bool,
+    },
+    Trepa {
+        ventana: String,
+        pared_der: bool,
+    },
     /// en el aire (cayendo o brincando)
     Vuela,
     Baila,
@@ -135,7 +141,12 @@ impl Bicho {
     }
 
     fn plataformas(&self, m: &Mundo, ancho: f32, alto: f32) -> Vec<Plataforma> {
-        let mut p = vec![Plataforma { ventana: None, x0: 0.0, x1: (ancho - self.cw).max(0.0), y: alto - m.abajo - self.ch }];
+        let mut p = vec![Plataforma {
+            ventana: None,
+            x0: 0.0,
+            x1: (ancho - self.cw).max(0.0),
+            y: alto - m.abajo - self.ch,
+        }];
         for v in &m.ventanas {
             let y = v.y - m.borde - self.ch;
             // con la cabeza fuera de la pantalla no; las antenas sí pueden
@@ -148,7 +159,12 @@ impl Bicho {
             if x1 < x0 {
                 continue;
             }
-            p.push(Plataforma { ventana: Some(v.id.clone()), x0, x1, y });
+            p.push(Plataforma {
+                ventana: Some(v.id.clone()),
+                x0,
+                x1,
+                y,
+            });
         }
         p
     }
@@ -156,7 +172,11 @@ impl Bicho {
     /// La x del lienzo pegado al lado de `v` (`pared_der`: la ventana le queda
     /// a la derecha).
     fn junto_a(&self, v: &Ventana, m: &Mundo, pared_der: bool) -> f32 {
-        if pared_der { v.x - m.borde - self.cw } else { v.x + v.w + m.borde }
+        if pared_der {
+            v.x - m.borde - self.cw
+        } else {
+            v.x + v.w + m.borde
+        }
     }
 
     /// Escoge qué hacer ahora que terminó lo anterior (estando parado en
@@ -168,7 +188,9 @@ impl Bicho {
             // una ventana que llegue al piso y con lado libre en la pantalla
             let mut opciones = Vec::new();
             for v in &m.ventanas {
-                if (v.y + v.h + m.borde - (piso + self.ch)).abs() > 40.0 || v.y - m.borde - self.ch + 4.0 * self.s < 0.0 {
+                if (v.y + v.h + m.borde - (piso + self.ch)).abs() > 40.0
+                    || v.y - m.borde - self.ch + 4.0 * self.s < 0.0
+                {
                     continue;
                 }
                 for pared_der in [true, false] {
@@ -179,7 +201,9 @@ impl Bicho {
                 }
             }
             if !opciones.is_empty() {
-                let (ventana, pared_der) = opciones[(self.azar() * opciones.len() as f32) as usize % opciones.len()].clone();
+                let (ventana, pared_der) = opciones
+                    [(self.azar() * opciones.len() as f32) as usize % opciones.len()]
+                .clone();
                 self.hace = Hace::VaATrepar { ventana, pared_der };
                 self.falta = 30.0;
                 return;
@@ -199,7 +223,11 @@ impl Bicho {
             return;
         }
         // de noche: más sentado y dormido
-        let r = if self.noche { self.azar() * 0.7 + 0.3 } else { self.azar() };
+        let r = if self.noche {
+            self.azar() * 0.7 + 0.3
+        } else {
+            self.azar()
+        };
         (self.hace, self.falta) = if r < 0.5 {
             if self.azar() < 0.35 {
                 self.der = !self.der;
@@ -218,7 +246,14 @@ impl Bicho {
         };
     }
 
-    pub fn tick(&mut self, dt: f32, m: &Mundo, ancho: f32, alto: f32, cursor: Option<(f32, f32)>) -> Look {
+    pub fn tick(
+        &mut self,
+        dt: f32,
+        m: &Mundo,
+        ancho: f32,
+        alto: f32,
+        cursor: Option<(f32, f32)>,
+    ) -> Look {
         let dt = dt.min(0.1);
         self.reloj += dt;
         self.aterrizo += dt;
@@ -249,7 +284,10 @@ impl Bicho {
         if let Some((cx, cy)) = cursor {
             let (bx, by) = (self.x + self.cw / 2.0, self.y + self.ch * 0.65);
             let cerca = (cx - bx).hypot(cy - by) < self.cw * 1.4;
-            if cerca && self.cariño_espera <= 0.0 && !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. }) {
+            if cerca
+                && self.cariño_espera <= 0.0
+                && !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. })
+            {
                 self.cariño(cx > bx);
                 if self.hace == Hace::Persigue {
                     self.falta = 0.0;
@@ -324,7 +362,10 @@ impl Bicho {
                 // la cabeza ya llegó a la orilla de arriba: se sube
                 let techo = v.y - m.borde;
                 if self.y + 4.0 * self.s <= techo {
-                    if let Some(p) = plats.iter().find(|p| p.ventana.as_deref() == Some(ventana.as_str())) {
+                    if let Some(p) = plats
+                        .iter()
+                        .find(|p| p.ventana.as_deref() == Some(ventana.as_str()))
+                    {
                         self.x = if pared_der { p.x0 } else { p.x1 };
                         self.y = p.y;
                         self.sobre = p.ventana.clone();
@@ -345,7 +386,9 @@ impl Bicho {
                     // cae en lo más alto que cruzó
                     let aterriza = plats
                         .iter()
-                        .filter(|p| antes <= p.y + 0.5 && self.y >= p.y && self.x >= p.x0 && self.x <= p.x1)
+                        .filter(|p| {
+                            antes <= p.y + 0.5 && self.y >= p.y && self.x >= p.x0 && self.x <= p.x1
+                        })
                         .min_by(|a, b| a.y.total_cmp(&b.y));
                     let piso = &plats[0];
                     let aterriza = aterriza.or((self.y >= piso.y).then_some(piso));
@@ -379,13 +422,19 @@ impl Bicho {
     /// en vez de caminar se aplasta y brinca.
     fn anda(&mut self, dt: f32, plats: &[Plataforma]) {
         let paso = self.paso();
-        let Some(p) = plats.iter().find(|p| p.ventana == self.sobre) else { return };
+        let Some(p) = plats.iter().find(|p| p.ventana == self.sobre) else {
+            return;
+        };
         if self.salta {
             self.carga -= dt;
             if self.carga > 0.0 {
                 return;
             }
-            let lejos = if self.der { self.x + paso * 0.5 > p.x1 } else { self.x - paso * 0.5 < p.x0 };
+            let lejos = if self.der {
+                self.x + paso * 0.5 > p.x1
+            } else {
+                self.x - paso * 0.5 < p.x0
+            };
             if lejos && (self.sobre.is_none() || self.azar() < 0.4) {
                 self.der = !self.der;
             }
@@ -424,7 +473,10 @@ impl Bicho {
 
     /// Para saludarse con otro: anda suelto y no acaba de saludar.
     pub fn saludable(&self) -> Option<(f32, Option<&str>)> {
-        let libre = matches!(self.hace, Hace::Camina | Hace::Para | Hace::Persigue | Hace::Sienta | Hace::Baila);
+        let libre = matches!(
+            self.hace,
+            Hace::Camina | Hace::Para | Hace::Persigue | Hace::Sienta | Hace::Baila
+        );
         (libre && self.cariño_espera <= 0.0).then_some((self.x, self.sobre.as_deref()))
     }
 
@@ -451,10 +503,18 @@ impl Bicho {
             },
             // como gusanito: se estira y se encoge
             Hace::Trepa { .. } => {
-                if (self.reloj / 0.22) as u32 % 2 == 1 { Forma::Alta } else { Forma::Ancha }
+                if (self.reloj / 0.22) as u32 % 2 == 1 {
+                    Forma::Alta
+                } else {
+                    Forma::Ancha
+                }
             }
             Hace::Baila => {
-                if (self.reloj * 2.2).fract() < 0.5 { Forma::Ancha } else { Forma::Alta }
+                if (self.reloj * 2.2).fract() < 0.5 {
+                    Forma::Ancha
+                } else {
+                    Forma::Alta
+                }
             }
             h => {
                 let carga = matches!(h, Hace::Camina | Hace::Persigue);
@@ -472,8 +532,16 @@ impl Bicho {
                     t if t < 0.31 => Forma::Normal,
                     t if t < 0.40 => Forma::Ancha,
                     _ => {
-                        let (vel, umbral) = if matches!(h, Hace::Duerme | Hace::Sienta) { (2.2, 0.1) } else { (5.0, 0.75) };
-                        if (self.reloj * vel).sin() > umbral { Forma::Ancha } else { Forma::Normal }
+                        let (vel, umbral) = if matches!(h, Hace::Duerme | Hace::Sienta) {
+                            (2.2, 0.1)
+                        } else {
+                            (5.0, 0.75)
+                        };
+                        if (self.reloj * vel).sin() > umbral {
+                            Forma::Ancha
+                        } else {
+                            Forma::Normal
+                        }
                     }
                 }
             }
@@ -488,7 +556,10 @@ impl Bicho {
             Hace::Para => Pose::Parado,
             Hace::Sienta => Pose::Sentado,
             Hace::Duerme => Pose::Duerme,
-            Hace::Trepa { pared_der, .. } => Pose::Trepa { paso: (self.reloj / 0.2) as u32 % 2 == 1, pared_der: *pared_der },
+            Hace::Trepa { pared_der, .. } => Pose::Trepa {
+                paso: (self.reloj / 0.2) as u32 % 2 == 1,
+                pared_der: *pared_der,
+            },
             Hace::Vuela => Pose::Brinca,
         };
         Look {
@@ -508,7 +579,12 @@ mod tests {
     use super::*;
 
     fn mundo(ventanas: Vec<Ventana>) -> Mundo {
-        Mundo { ventanas, abajo: 0.0, borde: 1.0, origen: (0.0, 0.0) }
+        Mundo {
+            ventanas,
+            abajo: 0.0,
+            borde: 1.0,
+            origen: (0.0, 0.0),
+        }
     }
 
     #[test]
@@ -525,7 +601,13 @@ mod tests {
 
     #[test]
     fn se_sube_a_las_ventanas_y_no_se_sale() {
-        let v = Ventana { id: "a".into(), x: 600.0, y: 300.0, w: 600.0, h: 899.0 };
+        let v = Ventana {
+            id: "a".into(),
+            x: 600.0,
+            y: 300.0,
+            w: 600.0,
+            h: 899.0,
+        };
         let m = mundo(vec![v]);
         let mut b = Bicho::new(3.0, 48.0, 60.0, 7);
         b.aparece(1920.0);
@@ -541,7 +623,13 @@ mod tests {
 
     #[test]
     fn si_la_ventana_se_va_se_cae() {
-        let v = Ventana { id: "a".into(), x: 0.0, y: 300.0, w: 1920.0, h: 899.0 };
+        let v = Ventana {
+            id: "a".into(),
+            x: 0.0,
+            y: 300.0,
+            w: 1920.0,
+            h: 899.0,
+        };
         let mut b = Bicho::new(3.0, 48.0, 60.0, 9);
         b.x = 500.0;
         b.y = -60.0;
@@ -592,9 +680,27 @@ mod tests {
     fn ventanas_en_la_orilla_no_lo_tumban() {
         // una casi fuera de la pantalla, una angostita, una con x negativa
         let vs = vec![
-            Ventana { id: "a".into(), x: 1900.0, y: 300.0, w: 300.0, h: 899.0 },
-            Ventana { id: "b".into(), x: 500.0, y: 400.0, w: 4.0, h: 799.0 },
-            Ventana { id: "c".into(), x: -400.0, y: 200.0, w: 380.0, h: 999.0 },
+            Ventana {
+                id: "a".into(),
+                x: 1900.0,
+                y: 300.0,
+                w: 300.0,
+                h: 899.0,
+            },
+            Ventana {
+                id: "b".into(),
+                x: 500.0,
+                y: 400.0,
+                w: 4.0,
+                h: 799.0,
+            },
+            Ventana {
+                id: "c".into(),
+                x: -400.0,
+                y: 200.0,
+                w: 380.0,
+                h: 999.0,
+            },
         ];
         let m = mundo(vs);
         for semilla in 1..40 {
@@ -617,7 +723,10 @@ mod tests {
         let m = mundo(vec![]);
         let mut vistas = std::collections::HashSet::new();
         for _ in 0..400 {
-            vistas.insert(format!("{:?}", b.tick(0.016, &m, 1920.0, 1200.0, None).forma));
+            vistas.insert(format!(
+                "{:?}",
+                b.tick(0.016, &m, 1920.0, 1200.0, None).forma
+            ));
         }
         for f in ["Plasta", "Aplastada", "Estirada", "Alta", "Normal", "Ancha"] {
             assert!(vistas.contains(f), "nunca hizo {f}: {vistas:?}");

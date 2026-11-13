@@ -38,14 +38,17 @@ use smithay_client_toolkit::{
     registry_handlers,
     shell::{
         WaylandSurface,
-        wlr_layer::{Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
+        wlr_layer::{
+            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+            LayerSurfaceConfigure,
+        },
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 const CUADRO: Duration = Duration::from_millis(33);
@@ -57,11 +60,17 @@ fn pidfile() -> PathBuf {
     runtime().join("bicho.pid")
 }
 fn home(p: &str) -> PathBuf {
-    std::env::var_os("HOME").map_or_else(PathBuf::new, PathBuf::from).join(p)
+    std::env::var_os("HOME")
+        .map_or_else(PathBuf::new, PathBuf::from)
+        .join(p)
 }
 
 fn running() -> Option<i32> {
-    let pid: i32 = std::fs::read_to_string(pidfile()).ok()?.trim().parse().ok()?;
+    let pid: i32 = std::fs::read_to_string(pidfile())
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
     vivo(pid).then_some(pid)
 }
 
@@ -69,9 +78,13 @@ fn running() -> Option<i32> {
 /// y uno guardado se quedaba de zombi mientras el menú seguía abierto (y el
 /// menú creía que seguían sueltos: ya no los dejaba salir).
 fn vivo(pid: i32) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return false };
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
     // "pid (comm) estado …"
-    let Some((izq, der)) = stat.rsplit_once(')') else { return false };
+    let Some((izq, der)) = stat.rsplit_once(')') else {
+        return false;
+    };
     izq.ends_with("(bicho") && !der.trim_start().starts_with(['Z', 'X'])
 }
 
@@ -91,8 +104,14 @@ fn bitacora(linea: &str) {
     if std::fs::metadata(&p).is_ok_and(|m| m.len() > 256 * 1024) {
         let _ = std::fs::remove_file(&p);
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
-        let ahora = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&p)
+    {
+        let ahora = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
         let _ = writeln!(f, "[{ahora}] {linea}");
     }
 }
@@ -124,7 +143,11 @@ fn main() {
         }
         Some("menu") => menu::menu(),
         Some("--auto") => {
-            if menu::al_iniciar() { suelta(&[]) } else { 0 }
+            if menu::al_iniciar() {
+                suelta(&[])
+            } else {
+                0
+            }
         }
         Some("ver") => {
             ver();
@@ -149,7 +172,10 @@ fn main() {
 
 fn uso() {
     let nombres: Vec<_> = arte::TODAS.iter().map(|e| e.nombre).collect();
-    eprintln!("uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\nespecies: {}", nombres.join(", "));
+    eprintln!(
+        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\nespecies: {}",
+        nombres.join(", ")
+    );
 }
 
 /// Los que andan sueltos ahorita.
@@ -177,9 +203,14 @@ fn suelta(pets: &[String]) -> i32 {
             std::thread::sleep(Duration::from_millis(25));
         }
     }
-    let Ok(exe) = std::env::current_exe() else { return 1 };
+    let Ok(exe) = std::env::current_exe() else {
+        return 1;
+    };
     let mut cmd = Command::new(exe);
-    cmd.arg("_run").args(pets).stdin(Stdio::null()).stdout(Stdio::null());
+    cmd.arg("_run")
+        .args(pets)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
     unsafe {
         use std::os::unix::process::CommandExt;
         // doble fork: el que se queda es nieto, no hijo de quien lo suelta. Si
@@ -221,8 +252,19 @@ fn ver() {
         let grids: Vec<Vec<String>> = poses
             .iter()
             .map(|&(_, pose, corazon, zzz, notas)| {
-                let look = Look { pose, derecha: true, parpadeo: false, corazon, zzz, notas, forma: arte::Forma::Normal };
-                arte::terminal(&arte::grid(e, &look), &colores).lines().map(String::from).collect()
+                let look = Look {
+                    pose,
+                    derecha: true,
+                    parpadeo: false,
+                    corazon,
+                    zzz,
+                    notas,
+                    forma: arte::Forma::Normal,
+                };
+                arte::terminal(&arte::grid(e, &look), &colores)
+                    .lines()
+                    .map(String::from)
+                    .collect()
             })
             .collect();
         println!("  {}", e.nombre);
@@ -234,12 +276,30 @@ fn ver() {
         println!("  \x1b[2m{}\x1b[0m\n", nombres.join("   "));
         if e.brinca {
             use arte::Forma;
-            let formas = [("plasta", Forma::Plasta), ("aplastada", Forma::Aplastada), ("normal", Forma::Normal), ("ancha", Forma::Ancha), ("alta", Forma::Alta), ("estirada", Forma::Estirada)];
+            let formas = [
+                ("plasta", Forma::Plasta),
+                ("aplastada", Forma::Aplastada),
+                ("normal", Forma::Normal),
+                ("ancha", Forma::Ancha),
+                ("alta", Forma::Alta),
+                ("estirada", Forma::Estirada),
+            ];
             let grids: Vec<Vec<String>> = formas
                 .iter()
                 .map(|&(_, forma)| {
-                    let look = Look { pose: Pose::Parado, derecha: true, parpadeo: false, corazon: None, zzz: None, notas: None, forma };
-                    arte::terminal(&arte::grid(e, &look), &colores).lines().map(String::from).collect()
+                    let look = Look {
+                        pose: Pose::Parado,
+                        derecha: true,
+                        parpadeo: false,
+                        corazon: None,
+                        zzz: None,
+                        notas: None,
+                        forma,
+                    };
+                    arte::terminal(&arte::grid(e, &look), &colores)
+                        .lines()
+                        .map(String::from)
+                        .collect()
                 })
                 .collect();
             for fila in 0..grids[0].len() {
@@ -261,7 +321,10 @@ struct Config {
 }
 
 fn config() -> Config {
-    let v: Value = std::fs::read(home(".config/bicho/config.json")).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or(Value::Null);
+    let v: Value = std::fs::read(home(".config/bicho/config.json"))
+        .ok()
+        .and_then(|d| serde_json::from_slice(&d).ok())
+        .unwrap_or(Value::Null);
     let pets: Vec<String> = v["pets"]
         .as_array()
         .into_iter()
@@ -271,7 +334,11 @@ fn config() -> Config {
         .map(String::from)
         .collect();
     Config {
-        pets: if pets.is_empty() { vec!["bicho".into()] } else { pets },
+        pets: if pets.is_empty() {
+            vec!["bicho".into()]
+        } else {
+            pets
+        },
         baila: v["dance"].as_bool().unwrap_or(true),
         escala: v["scale"].as_u64().unwrap_or(3).clamp(1, 8) as u32,
         velocidad: v["speed"].as_f64().unwrap_or(1.0).clamp(0.1, 5.0) as f32,
@@ -286,7 +353,10 @@ fn colores_path() -> PathBuf {
 /// Los colores del look: el cuerpo, el color de la especie; los ojos, el
 /// primer plano.
 fn colores(e: &arte::Especie) -> [u32; arte::COLORES] {
-    let c: Value = std::fs::read(colores_path()).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or(Value::Null);
+    let c: Value = std::fs::read(colores_path())
+        .ok()
+        .and_then(|d| serde_json::from_slice(&d).ok())
+        .unwrap_or(Value::Null);
     let rgb = |keys: &[&str], def: u32| -> u32 {
         keys.iter()
             .find_map(|k| c[k].as_str())
@@ -328,7 +398,11 @@ fn oye_musica(suena: Arc<AtomicBool>) {
                 .args(["-a", "status"])
                 .stderr(Stdio::null())
                 .output()
-                .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == "Playing"));
+                .is_ok_and(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|l| l.trim() == "Playing")
+                });
             suena.store(si, Ordering::Relaxed);
             std::thread::sleep(Duration::from_secs(2));
         }
@@ -386,8 +460,12 @@ impl App {
         if !self.mascotas.is_empty() {
             return;
         }
-        let Some(info) = self.output.info(&output) else { return };
-        let Some((w, h)) = info.logical_size else { return };
+        let Some(info) = self.output.info(&output) else {
+            return;
+        };
+        let Some((w, h)) = info.logical_size else {
+            return;
+        };
         if let Some(m) = &self.monitor
             && info.name.as_deref() != Some(m.as_str())
         {
@@ -397,31 +475,56 @@ impl App {
         self.pantalla = (w as f32, h as f32);
         let px = self.cfg.escala;
         for (i, nombre) in self.cfg.pets.clone().iter().enumerate() {
-            let Some(especie) = arte::especie(nombre) else { continue };
+            let Some(especie) = arte::especie(nombre) else {
+                continue;
+            };
             let surface = self.compositor.create_surface(&self.qh);
             if let Ok(region) = Region::new(&self.compositor) {
                 surface.set_input_region(Some(region.wl_region()));
             }
-            let layer = self.layer_shell.create_layer_surface(&self.qh, surface, Layer::Top, Some("bicho"), Some(&output));
+            let layer = self.layer_shell.create_layer_surface(
+                &self.qh,
+                surface,
+                Layer::Top,
+                Some("bicho"),
+                Some(&output),
+            );
             layer.set_anchor(Anchor::TOP | Anchor::LEFT);
             layer.set_exclusive_zone(-1);
             layer.set_keyboard_interactivity(KeyboardInteractivity::None);
             layer.set_size(arte::ANCHO as u32 * px, arte::ALTO as u32 * px);
             layer.commit();
-            let semilla = self.semilla.wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(i as u64 * 0x2545_f491);
-            let mut b = bicho::Bicho::new(px as f32, (arte::ANCHO as u32 * px) as f32, (arte::ALTO as u32 * px) as f32, semilla);
+            let semilla = self
+                .semilla
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .wrapping_add(i as u64 * 0x2545_f491);
+            let mut b = bicho::Bicho::new(
+                px as f32,
+                (arte::ANCHO as u32 * px) as f32,
+                (arte::ALTO as u32 * px) as f32,
+                semilla,
+            );
             b.velocidad = self.cfg.velocidad;
             b.trepa = self.cfg.trepa;
             b.salta = especie.brinca;
             b.aparece(self.pantalla.0);
-            self.mascotas.push(Mascota { especie, layer, pool: None, bicho: b, colores: colores(especie), margen: (i32::MIN, i32::MIN) });
+            self.mascotas.push(Mascota {
+                especie,
+                layer,
+                pool: None,
+                bicho: b,
+                colores: colores(especie),
+                margen: (i32::MIN, i32::MIN),
+            });
         }
     }
 
     fn tick(&mut self) {
         let dt = self.ultimo.elapsed().as_secs_f32();
         self.ultimo = Instant::now();
-        let Some(monitor) = self.monitor.clone() else { return };
+        let Some(monitor) = self.monitor.clone() else {
+            return;
+        };
         if !self.configurado {
             return;
         }
@@ -458,7 +561,9 @@ impl App {
         for i in 0..self.mascotas.len() {
             for j in i + 1..self.mascotas.len() {
                 let (a, b) = (&self.mascotas[i].bicho, &self.mascotas[j].bicho);
-                let (Some((xa, sa)), Some((xb, sb))) = (a.saludable(), b.saludable()) else { continue };
+                let (Some((xa, sa)), Some((xb, sb))) = (a.saludable(), b.saludable()) else {
+                    continue;
+                };
                 if sa == sb && (xa - xb).abs() < a.cw * 0.7 {
                     self.mascotas[i].bicho.cariño(xb > xa);
                     self.mascotas[j].bicho.cariño(xa > xb);
@@ -487,7 +592,10 @@ impl App {
         };
         if let Ok((buffer, canvas)) = pool.create_buffer(w, h, w * 4, wl_shm::Format::Argb8888) {
             arte::pinta(g, &p.colores, px, canvas);
-            let margen = ((p.bicho.y - p.bicho.dy).round() as i32, p.bicho.x.round() as i32);
+            let margen = (
+                (p.bicho.y - p.bicho.dy).round() as i32,
+                p.bicho.x.round() as i32,
+            );
             if margen != p.margen {
                 p.layer.set_margin(margen.0, 0, 0, margen.1);
                 p.margen = margen;
@@ -528,7 +636,9 @@ fn vive(cfg: Config) -> Result<(), String> {
     let qh = queue.handle();
     let mut event_loop: EventLoop<App> = EventLoop::try_new().map_err(|e| e.to_string())?;
     let handle = event_loop.handle();
-    WaylandSource::new(conn.clone(), queue).insert(handle.clone()).map_err(|e| e.to_string())?;
+    WaylandSource::new(conn.clone(), queue)
+        .insert(handle.clone())
+        .map_err(|e| e.to_string())?;
     handle
         .insert_source(Timer::from_duration(CUADRO), |_, _, app: &mut App| {
             app.tick();
@@ -543,8 +653,10 @@ fn vive(cfg: Config) -> Result<(), String> {
     let mut app = App {
         registry: RegistryState::new(&globals),
         output: OutputState::new(&globals, &qh),
-        compositor: CompositorState::bind(&globals, &qh).map_err(|_| "el compositor no tiene wl_compositor")?,
-        layer_shell: LayerShell::bind(&globals, &qh).map_err(|_| "el compositor no tiene layer-shell")?,
+        compositor: CompositorState::bind(&globals, &qh)
+            .map_err(|_| "el compositor no tiene wl_compositor")?,
+        layer_shell: LayerShell::bind(&globals, &qh)
+            .map_err(|_| "el compositor no tiene layer-shell")?,
         shm: Shm::bind(&globals, &qh).map_err(|_| "el compositor no tiene wl_shm")?,
         qh,
         cfg,
@@ -553,7 +665,9 @@ fn vive(cfg: Config) -> Result<(), String> {
         pantalla: (0.0, 0.0),
         configurado: false,
         escala_buffer: 1,
-        semilla: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(7, |d| d.as_nanos() as u64),
+        semilla: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(7, |d| d.as_nanos() as u64),
         mundo: hypr::Mundo::default(),
         borde: hypr::borde(),
         cursor: None,
@@ -565,13 +679,21 @@ fn vive(cfg: Config) -> Result<(), String> {
         exit: false,
     };
     while !app.exit {
-        event_loop.dispatch(Some(Duration::from_millis(100)), &mut app).map_err(|e| e.to_string())?;
+        event_loop
+            .dispatch(Some(Duration::from_millis(100)), &mut app)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 impl CompositorHandler for App {
-    fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, factor: i32) {
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        factor: i32,
+    ) {
         if factor.max(1) != self.escala_buffer {
             self.escala_buffer = factor.max(1);
             for p in &mut self.mascotas {
@@ -579,10 +701,31 @@ impl CompositorHandler for App {
             }
         }
     }
-    fn transform_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: wl_output::Transform) {}
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: wl_output::Transform,
+    ) {
+    }
     fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
-    fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
-    fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
 }
 
 impl OutputHandler for App {
@@ -592,7 +735,12 @@ impl OutputHandler for App {
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
         self.crea(output);
     }
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+    fn update_output(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
         if let Some(info) = self.output.info(&output)
             && info.name == self.monitor
             && let Some((w, h)) = info.logical_size
@@ -608,7 +756,14 @@ impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
         self.exit = true;
     }
-    fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface, _: LayerSurfaceConfigure, _: u32) {
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &LayerSurface,
+        _: LayerSurfaceConfigure,
+        _: u32,
+    ) {
         self.configurado = true;
     }
 }
