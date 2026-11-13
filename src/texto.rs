@@ -66,6 +66,7 @@ pub fn arranca() -> Compartido {
     let hilo = c.clone();
     std::thread::spawn(move || {
         let mut antes: HashMap<String, (Huella, Vec<Repisa>)> = HashMap::new();
+        let mut taller = Taller::default();
         loop {
             std::thread::sleep(CADA);
             let pedidos = hilo.lock().map(|e| e.pedidos.clone()).unwrap_or_default();
@@ -82,11 +83,20 @@ pub fn arranca() -> Compartido {
                 );
                 let r = match antes.remove(&p.id) {
                     Some((h, r)) if h == huella => r,
-                    _ => repisas(&img, p),
+                    _ => repisas_con(&img, p, &mut taller),
                 };
                 nuevas.insert(p.id.clone(), (huella, r));
             }
             antes = nuevas;
+            // lo que soltaron las fotos, de vuelta al sistema (si no, glibc se
+            // lo queda y la memoria nomás crece)
+            if !pedidos.is_empty() {
+                devuelve_memoria();
+            } else if taller.cuenta.capacity() > 0 {
+                // nadie anda en una terminal: el taller (~400 KB) sobra
+                taller = Taller::default();
+                devuelve_memoria();
+            }
             if let Ok(mut e) = hilo.lock() {
                 e.repisas = antes
                     .iter()
@@ -131,11 +141,12 @@ fn foto((x, y, w, h): Rect) -> Option<Imagen> {
     if !out.status.success() {
         return None;
     }
-    ppm(&out.stdout)
+    ppm(out.stdout)
 }
 
-/// Lee un PPM binario (P6, 255).
-fn ppm(d: &[u8]) -> Option<Imagen> {
+/// Lee un PPM binario (P6, 255). Se queda con el mismo buffer (nomás le
+/// quita el encabezado): una foto son ~1 MB, mejor no copiarla.
+fn ppm(mut d: Vec<u8>) -> Option<Imagen> {
     let mut campos = Vec::new();
     let mut i = 0;
     while campos.len() < 4 {
@@ -152,12 +163,52 @@ fn ppm(d: &[u8]) -> Option<Imagen> {
     if campos[0] != "P6" || campos[3] != "255" {
         return None;
     }
-    let rgb = d.get(i + 1..i + 1 + w * h * 3)?.to_vec();
-    Some(Imagen { w, h, rgb })
+    let (ini, largo) = (i + 1, w * h * 3);
+    if d.len() < ini + largo {
+        return None;
+    }
+    d.drain(..ini);
+    d.truncate(largo);
+    d.shrink_to_fit();
+    Some(Imagen { w, h, rgb: d })
+}
+
+/// Que glibc pida aparte (mmap) todo bloque grande, siempre: así una foto,
+/// al soltarse, regresa de una al sistema. Sin esto glibc va subiendo el
+/// umbral solo y los bloques grandes se le quedan atorados en el heap.
+pub fn memoria_ajustada() {
+    // SAFETY: mallopt solo cambia parámetros del malloc de glibc
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 128 * 1024);
+    }
+}
+
+/// Le regresa al sistema la memoria que ya se soltó.
+pub fn devuelve_memoria() {
+    // SAFETY: malloc_trim nomás reacomoda el heap de glibc
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+/// Lo que el análisis usa de una foto a otra (para no pedir memoria nueva
+/// cada vez): el mapa de tinta, los fondos y el conteo de colores.
+#[derive(Default)]
+pub struct Taller {
+    tinta: Vec<bool>,
+    fondos: Vec<(i32, i32, i32)>,
+    cuenta: Vec<u16>,
+    tocados: Vec<usize>,
 }
 
 /// Las repisas de una foto de la terminal.
+#[cfg(test)]
 pub fn repisas(img: &Imagen, p: &Pedido) -> Vec<Repisa> {
+    repisas_con(img, p, &mut Taller::default())
+}
+
+/// Las repisas de una foto de la terminal, con un taller que se reusa.
+pub fn repisas_con(img: &Imagen, p: &Pedido, taller: &mut Taller) -> Vec<Repisa> {
     // se trabaja en la zona de la foto; las repisas salen contando desde la
     // esquina de la ventana
     let (rx, ry, rw, rh) = p.zona;
@@ -182,11 +233,14 @@ pub fn repisas(img: &Imagen, p: &Pedido) -> Vec<Repisa> {
     // gane). Con la terminal transparente el wallpaper de atrás cambia de un
     // lado a otro, pero despacito; las letras sí contrastan con lo de junto
     let (cx, cy) = (w.div_ceil(CUADRITO), h.div_ceil(CUADRITO));
-    let mut fondos = vec![(0, 0, 0); cx * cy];
+    let mut fondos = std::mem::take(&mut taller.fondos);
+    fondos.clear();
+    fondos.resize(cx * cy, (0, 0, 0));
     // conteo por color (5 bits por canal), reusado: nomás se limpia lo que
     // se tocó
-    let mut cuenta = vec![0u16; 1 << 15];
-    let mut tocados: Vec<usize> = Vec::new();
+    let mut cuenta = std::mem::take(&mut taller.cuenta);
+    cuenta.resize(1 << 15, 0);
+    let mut tocados = std::mem::take(&mut taller.tocados);
     for ty in 0..cy {
         for tx in 0..cx {
             for &i in &tocados {
@@ -214,7 +268,9 @@ pub fn repisas(img: &Imagen, p: &Pedido) -> Vec<Repisa> {
             }
         }
     }
-    let mut tinta = vec![false; w * h];
+    let mut tinta = std::mem::take(&mut taller.tinta);
+    tinta.clear();
+    tinta.resize(w * h, false);
     for y in 0..h {
         for x in 0..w {
             let (r, g, b) = px(x, y);
@@ -300,6 +356,12 @@ pub fn repisas(img: &Imagen, p: &Pedido) -> Vec<Repisa> {
             cierra(&mut corrida, &mut out);
         }
     }
+    // al taller, para la próxima (el conteo queda limpio: lo que se tocó se
+    // borra al empezar cada cuadrito)
+    taller.tinta = tinta;
+    taller.fondos = fondos;
+    taller.cuenta = cuenta;
+    taller.tocados = tocados;
     out
 }
 
@@ -408,7 +470,7 @@ mod tests {
     fn lee_ppm() {
         let mut d = b"P6\n2 1\n255\n".to_vec();
         d.extend([1, 2, 3, 4, 5, 6]);
-        let img = ppm(&d).unwrap();
+        let img = ppm(d).unwrap();
         assert_eq!((img.w, img.h, img.rgb.len()), (2, 1, 6));
     }
 }
@@ -452,4 +514,89 @@ fn en_vivo() {
             println!("   y={} x={}..{}", x.y, x.x0, x.x1);
         }
     }
+}
+
+/// Cuánta memoria crece al ver una terminal muchas veces:
+/// `cargo test memoria -- --ignored --nocapture`
+#[cfg(test)]
+#[test]
+#[ignore]
+fn memoria() {
+    let rss = || {
+        std::fs::read_to_string("/proc/self/status")
+            .unwrap()
+            .lines()
+            .find(|l| l.starts_with("VmRSS"))
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+    };
+    let m = crate::hypr::mundo(&crate::hypr::monitor_enfocado().unwrap(), 2.0);
+    let v = m
+        .ventanas
+        .iter()
+        .find(|v| m.clis.contains(&v.id))
+        .expect("una terminal");
+    let rect = (v.x + m.origen.0, v.y + m.origen.1, v.w, v.h);
+    let zona = (
+        rect.0 + 100.0,
+        rect.1 + 100.0,
+        690.0f32.min(rect.2 - 100.0),
+        540.0f32.min(rect.3 - 100.0),
+    );
+    let p = Pedido {
+        id: v.id.clone(),
+        rect,
+        zona,
+        tapar: vec![],
+        lienzo: (48.0, 60.0),
+        cuerpo: (6.0, 41.0, 30.0),
+    };
+    memoria_ajustada();
+    // una vuelta para que se cargue el código (eso no es crecer)
+    let _ = repisas(&foto(p.zona).expect("grim"), &p);
+    devuelve_memoria();
+    let antes = rss();
+    let anon0 = std::fs::read_to_string("/proc/self/status")
+        .unwrap()
+        .lines()
+        .find(|l| l.starts_with("RssAnon"))
+        .unwrap()
+        .to_string();
+    let file0 = std::fs::read_to_string("/proc/self/status")
+        .unwrap()
+        .lines()
+        .find(|l| l.starts_with("RssFile"))
+        .unwrap()
+        .to_string();
+    println!("MEMORIA al empezar: {anon0} | {file0}");
+    let mut pico = antes;
+    let mut taller = Taller::default();
+    for _ in 0..40 {
+        let img = foto(p.zona).expect("grim");
+        let _ = repisas_con(&img, &p, &mut taller);
+        drop(img);
+        devuelve_memoria();
+        pico = pico.max(rss());
+    }
+    let campo = |k: &str| {
+        std::fs::read_to_string("/proc/self/status")
+            .unwrap()
+            .lines()
+            .find(|l| l.starts_with(k))
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string()
+    };
+    println!(
+        "MEMORIA antes {antes} KB, pico {pico} KB, al final {} KB (anónima {} KB, de archivos {} KB)",
+        rss(),
+        campo("RssAnon"),
+        campo("RssFile")
+    );
 }

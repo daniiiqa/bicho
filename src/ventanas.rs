@@ -44,7 +44,8 @@ impl App {
             ));
         }
         let mut pedidos: Vec<texto::Pedido> = Vec::new();
-        for p in &self.mascotas {
+        // nomás los despiertos piden fotos (dormido o sentado no brinca)
+        for p in self.mascotas.iter().filter(|p| p.bicho.despierto()) {
             let Some(id) = p.bicho.dentro.as_ref().filter(|id| m.clis.contains(id)) else {
                 continue;
             };
@@ -86,12 +87,26 @@ impl App {
         }
         let Ok(mut e) = self.texto.lock() else { return };
         for p in &mut self.mascotas {
-            p.bicho.repisas = match &p.bicho.dentro {
-                Some(id) if pedidos.iter().any(|q| &q.id == id) => {
-                    e.repisas.get(id).cloned().unwrap_or_default()
+            match &p.bicho.dentro {
+                Some(id) if m.clis.contains(id) => {
+                    // cambió de terminal: las repisas de la otra no sirven
+                    if p.repisas_de.as_ref() != Some(id) {
+                        p.bicho.repisas.clear();
+                        p.repisas_de = Some(id.clone());
+                    }
+                    // fotos nuevas, si ya llegaron; si no (o anda dormido),
+                    // se queda con las que tenía
+                    if pedidos.iter().any(|q| &q.id == id)
+                        && let Some(r) = e.repisas.get(id)
+                    {
+                        p.bicho.repisas = r.clone();
+                    }
                 }
-                _ => Vec::new(),
-            };
+                _ => {
+                    p.bicho.repisas.clear();
+                    p.repisas_de = None;
+                }
+            }
         }
         e.pedidos = pedidos;
     }
@@ -163,5 +178,17 @@ impl App {
             || self.se_movio > 0.0
             || !self.deslizando.is_empty()
             || self.mascotas.iter().any(|p| p.bicho.en_el_aire())
+    }
+
+    /// Cada cuánto dibujar: al ritmo de la pantalla si algo se mueve, a 30
+    /// si alguien anda haciendo algo, y a 10 si todos están quietos.
+    pub(crate) fn cuadro(&self) -> Duration {
+        if self.rapido() {
+            return CUADRO_RAPIDO;
+        }
+        match self.mascotas.iter().map(|p| p.bicho.ritmo()).max() {
+            Some(1..) => CUADRO,
+            _ => CUADRO_QUIETO,
+        }
     }
 }

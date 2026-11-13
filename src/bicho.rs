@@ -383,7 +383,8 @@ impl Bicho {
         alto: f32,
         cursor: Option<(f32, f32)>,
     ) -> Look {
-        let dt = dt.min(0.1);
+        // quietos se dibujan a 10 por segundo: que el tiempo les alcance igual
+        let dt = dt.min(0.25);
         self.reloj += dt;
         self.aterrizo += dt;
         self.falta -= dt;
@@ -719,6 +720,32 @@ impl Bicho {
         self.vx = 0.0;
         self.vuelve = None;
         (self.hace, self.falta) = (Hace::Vuela, 0.0);
+    }
+
+    /// Qué tan seguido hay que dibujarlo: 2 se mueve rápido (en el aire,
+    /// agarrado), 1 anda haciendo algo (caminando, trepando, bailando, con su
+    /// corazón o su "!"), 0 está quieto (sentado, parado, dormido).
+    pub fn ritmo(&self) -> u8 {
+        match self.hace {
+            Hace::Vuela | Hace::Agarrado => 2,
+            _ if self.oculto => 0,
+            Hace::Para | Hace::Sienta | Hace::Duerme
+                if self.corazon <= 0.0 && self.alerta <= 0.0 =>
+            {
+                0
+            }
+            _ => 1,
+        }
+    }
+
+    /// ¿Está despierto y moviéndose (o cayendo)? Solo entonces le sirven las
+    /// fotos de las letras: dormido o sentado no va a brincar.
+    pub fn despierto(&self) -> bool {
+        !self.oculto
+            && matches!(
+                self.hace,
+                Hace::Camina | Hace::Para | Hace::Persigue | Hace::Baila | Hace::Vuela
+            )
     }
 
     /// ¿Va en el aire o agarrado? (se tiene que ver fluido)
@@ -1303,6 +1330,41 @@ mod tests {
             b.tick(0.033, &m, 1920.0, 1200.0, None);
         }
         assert_ne!(b.hace, Hace::Sienta);
+    }
+
+    #[test]
+    fn quietos_se_dibujan_menos_y_no_piden_fotos() {
+        let m = mundo(vec![]);
+        let mut b = en_el_piso(15);
+        assert_eq!((b.ritmo(), b.despierto()), (1, true), "caminando");
+        b.hace = Hace::Duerme;
+        b.falta = 100.0;
+        b.tick(0.1, &m, 1920.0, 1200.0, None);
+        assert_eq!((b.ritmo(), b.despierto()), (0, false), "dormido");
+        b.asusta();
+        assert_eq!(b.ritmo(), 2, "en el aire");
+    }
+
+    #[test]
+    fn a_pasos_grandes_igual_cae_en_su_ventana() {
+        // a 10 por segundo (o con un tirón de 0.25 s) no se pasa de largo
+        let vs = vec![Ventana {
+            id: "a".into(),
+            x: 800.0,
+            y: 700.0,
+            w: 400.0,
+            h: 300.0,
+        }];
+        let m = mundo(vs);
+        let mut b = Bicho::new(3.0, 48.0, 60.0, 16);
+        (b.x, b.y, b.hace) = (900.0, 100.0, Hace::Vuela);
+        for _ in 0..40 {
+            b.tick(0.25, &m, 1920.0, 1200.0, None);
+            if b.hace != Hace::Vuela {
+                break;
+            }
+        }
+        assert_eq!(b.y, 700.0 - 1.0 - 60.0, "debió caer encima de la ventana");
     }
 
     #[test]

@@ -80,6 +80,8 @@ const CUADRO: Duration = Duration::from_millis(33);
 /// y cuando algo se tiene que ver fluido (pegados a una ventana, agarrados,
 /// el globo): al ritmo de la pantalla
 const CUADRO_RAPIDO: Duration = Duration::from_millis(16);
+/// y cuando todos están quietos (sentados, parados, dormidos)
+const CUADRO_QUIETO: Duration = Duration::from_millis(100);
 const BOTON_IZQ: u32 = 0x110;
 
 fn runtime() -> PathBuf {
@@ -489,6 +491,8 @@ struct Mascota {
     /// lo último que se pintó (dibujo, colores, escala): si no cambia, no se
     /// vuelve a pintar
     pintado: Option<(arte::Grid, [u32; arte::COLORES], i32)>,
+    /// de qué terminal son sus repisas
+    repisas_de: Option<String>,
 }
 
 /// Dónde queda el cuerpo de un animalito parado, dentro de su lienzo.
@@ -566,6 +570,8 @@ struct App {
     cada_mundo: f32,
     /// lo que no urge (los colores, si es de noche)
     cada_resto: f32,
+    /// cada cuánto se le regresa memoria al sistema
+    cada_limpieza: f32,
     /// dónde están las ventanas de veras (`mundo` se va acercando a esto)
     reales: Vec<hypr::Ventana>,
     /// las que vienen deslizándose a su lugar
@@ -641,6 +647,7 @@ impl App {
                 region: None,
                 cuerpo: cuerpo(especie, px as f32),
                 pintado: None,
+                repisas_de: None,
             });
         }
     }
@@ -667,6 +674,12 @@ impl App {
         self.se_movio = (self.se_movio - dt).max(0.0);
         if self.cada_resto <= 0.0 {
             self.cada_resto = 0.4;
+            // de vez en cuando, lo que se soltó de vuelta al sistema
+            self.cada_limpieza -= 0.4;
+            if self.cada_limpieza <= 0.0 {
+                self.cada_limpieza = 30.0;
+                texto::devuelve_memoria();
+            }
             noche = Some(es_de_noche());
             let m = mtime(&colores_path());
             if m != self.colores_mtime {
@@ -792,6 +805,7 @@ impl App {
 
 fn run(pets: &[String]) -> Result<(), String> {
     std::panic::set_hook(Box::new(|info| bitacora(&format!("tronó: {info}"))));
+    texto::memoria_ajustada();
     // donde el shell deja sus "truena" (bicho shell) y los hooks de Claude
     let _ = std::fs::create_dir_all(runtime().join("bicho"));
     // nunca dos a la vez
@@ -823,7 +837,7 @@ fn vive(cfg: Config) -> Result<(), String> {
     handle
         .insert_source(Timer::from_duration(CUADRO), |_, _, app: &mut App| {
             app.tick();
-            TimeoutAction::ToDuration(if app.rapido() { CUADRO_RAPIDO } else { CUADRO })
+            TimeoutAction::ToDuration(app.cuadro())
         })
         .map_err(|e| e.to_string())?;
     let musica = Arc::new(AtomicBool::new(false));
@@ -876,6 +890,7 @@ fn vive(cfg: Config) -> Result<(), String> {
         ultimo: Instant::now(),
         cada_mundo: 0.0,
         cada_resto: 0.0,
+        cada_limpieza: 30.0,
         reales: Vec::new(),
         deslizando: Default::default(),
         se_movio: 0.0,
