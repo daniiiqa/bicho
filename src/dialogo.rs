@@ -15,6 +15,21 @@ pub(crate) struct Dialogo {
     pub(crate) margen: (i32, i32),
     /// se cierra solo en tantos segundos (ya contestaste)
     pub(crate) cierra_en: Option<f32>,
+    /// por qué salió
+    pub(crate) motivo: Motivo,
+}
+
+/// Por qué salió el globo.
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum Motivo {
+    /// le diste clic a claudio: "¿ocupas ayuda?"
+    Ayuda,
+    /// Claude te está preguntando algo en otra ventana: "voy / luego"
+    Pregunta {
+        sesion: String,
+        t: u64,
+        ventana: Option<String>,
+    },
 }
 
 impl App {
@@ -24,10 +39,16 @@ impl App {
         } else {
             globo::Globo::new("need help?", &["yes", "no"])
         };
-        self.dialogo_con(i, globo, None);
+        self.dialogo_con(i, globo, None, Motivo::Ayuda);
     }
 
-    pub(crate) fn dialogo_con(&mut self, i: usize, globo: globo::Globo, cierra_en: Option<f32>) {
+    pub(crate) fn dialogo_con(
+        &mut self,
+        i: usize,
+        globo: globo::Globo,
+        cierra_en: Option<f32>,
+        motivo: Motivo,
+    ) {
         self.cierra_dialogo();
         let Some(output) = self
             .output
@@ -61,6 +82,7 @@ impl App {
             configurado: false,
             margen: (i32::MIN, i32::MIN),
             cierra_en,
+            motivo,
         });
     }
 
@@ -94,7 +116,31 @@ impl App {
                     d.globo.termina();
                     return;
                 }
-                match d.globo.opcion_en(x, y) {
+                let opcion = d.globo.opcion_en(x, y);
+                // te preguntaba Claude: "voy" te lleva a esa ventana; "luego"
+                // ya no te insiste con esa misma pregunta
+                if let Motivo::Pregunta { sesion, t, ventana } = d.motivo.clone() {
+                    if opcion.is_some() {
+                        // contestada (vas o no): ya no insiste con esa
+                        self.claude_ignorada = Some((sesion, t));
+                    }
+                    match opcion {
+                        Some(0) => {
+                            if let Some(v) = ventana {
+                                std::thread::spawn(move || hypr::enfoca(&v));
+                            }
+                            d.globo.cambia(if menu::es() { "¡va!" } else { "on it!" });
+                            d.cierra_en = Some(0.7);
+                        }
+                        Some(_) => {
+                            d.globo.cambia(":)");
+                            d.cierra_en = Some(0.8);
+                        }
+                        None => {}
+                    }
+                    return;
+                }
+                match opcion {
                     Some(0) => {
                         // si anda metido en una ventana, en la carpeta de esa ventana
                         let dentro = self.mascotas.get(d.i).and_then(|p| p.bicho.dentro.clone());
@@ -152,6 +198,7 @@ impl App {
                 corazon: None,
                 zzz: None,
                 notas: None,
+                piensa: None,
                 forma: arte::Forma::Normal,
             },
         ))

@@ -52,6 +52,30 @@ bicho --auto         al iniciar sesión: los suelta si el menú dice que sí
  "climb": true, "dance": true, "login": false}
 ```
 
+## claudio y Claude Code
+
+Con los hooks de Claude Code, claudio sabe cómo va Claude: mientras trabaja le
+salen puntitos, cuando acaba brinca con un corazón, y si Claude te pregunta
+algo (un permiso, una pregunta) y andas en otra ventana, le sale un globo:
+"¡claude te pregunta algo!" ▶ voy / luego. "voy" te lleva a esa ventana. Si
+claudio anda metido en la terminal de una sesión, se fija en esa.
+
+En `~/.claude/settings.json`:
+
+```json
+"hooks": {
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "bicho claude trabajando 2>/dev/null || true" }] }],
+  "PreToolUse":       [{ "hooks": [{ "type": "command", "command": "bicho claude trabajando 2>/dev/null || true" }] }],
+  "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "bicho claude trabajando 2>/dev/null || true" }] }],
+  "Stop":             [{ "hooks": [{ "type": "command", "command": "bicho claude listo 2>/dev/null || true" }] }],
+  "Notification":     [{ "matcher": "permission_prompt|elicitation_dialog",
+                         "hooks": [{ "type": "command", "command": "bicho claude pregunta 2>/dev/null || true" }] }],
+  "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "bicho claude fin 2>/dev/null || true" }] }]
+}
+```
+
+El estado de cada sesión queda en `$XDG_RUNTIME_DIR/bicho/claude/`.
+
 ## Disfraces
 
 Si existe `~/.config/bicho/<especie>.txt`, ese dibujo reemplaza al de la

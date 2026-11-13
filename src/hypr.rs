@@ -70,6 +70,8 @@ pub struct Mundo {
     pub todas: Vec<String>,
     /// las que son terminales (ahí las letras son repisas)
     pub clis: Vec<String>,
+    /// el pid de cada ventana (de todas): para saber en cuál anda un proceso
+    pub pids: Vec<(String, i32)>,
 }
 
 /// ¿La ventana de ese pid es una terminal?
@@ -115,6 +117,17 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
         .flatten()
         .filter_map(|c| c["address"].as_str().map(String::from))
         .collect();
+    let pids = clientes
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            Some((
+                c["address"].as_str()?.to_string(),
+                c["pid"].as_i64()? as i32,
+            ))
+        })
+        .collect();
     let ventanas = clientes
         .as_array()
         .into_iter()
@@ -146,6 +159,7 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
         origen: (mx, my),
         todas,
         clis,
+        pids,
     }
 }
 
@@ -181,6 +195,36 @@ pub fn ventana_en(monitor: &str, x: f32, y: f32) -> Option<String> {
         .min_by_key(|c| c["focusHistoryID"].as_i64().unwrap_or(i64::MAX))
         .and_then(|c| c["address"].as_str())
         .map(String::from)
+}
+
+/// La ventana que tiene el foco (su address).
+pub fn activa() -> Option<String> {
+    pide("activewindow")["address"].as_str().map(String::from)
+}
+
+/// Enfoca esa ventana (y su escritorio).
+pub fn enfoca(id: &str) {
+    if id.starts_with("0x") && id[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        let _ = std::process::Command::new("hyprctl")
+            .args([
+                "dispatch",
+                &format!("hl.dsp.focus({{ window = \"address:{id}\" }})"),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// La ventana donde anda alguno de estos procesos (el primero que sea de una
+/// ventana).
+pub fn ventana_de(m: &Mundo, pids: &[i32]) -> Option<String> {
+    pids.iter().find_map(|p| {
+        m.pids
+            .iter()
+            .find(|(_, q)| q == p)
+            .map(|(id, _)| id.clone())
+    })
 }
 
 /// El pid de la ventana con ese address.

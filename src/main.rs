@@ -21,6 +21,8 @@
 
 mod arte;
 mod bicho;
+mod claude;
+mod claudio;
 mod dialogo;
 mod globo;
 mod hypr;
@@ -160,6 +162,8 @@ fn main() {
             suelta(&lista)
         }
         Some("menu") => menu::menu(),
+        // lo que corren los hooks de Claude Code
+        Some("claude") => claude::hook(resto.first().map_or("", String::as_str)),
         Some("--auto") => {
             if menu::al_iniciar() {
                 suelta(&[])
@@ -191,7 +195,7 @@ fn main() {
 fn uso() {
     let nombres: Vec<_> = arte::todas().iter().map(|e| e.nombre).collect();
     eprintln!(
-        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\nespecies: {}",
+        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\n      bicho claude trabajando|listo|pregunta|fin   (para los hooks de Claude Code)\nespecies: {}",
         nombres.join(", ")
     );
 }
@@ -277,6 +281,7 @@ fn ver() {
                     corazon,
                     zzz,
                     notas,
+                    piensa: None,
                     forma: arte::Forma::Normal,
                 };
                 arte::terminal(&arte::grid(e, &look), &colores)
@@ -312,6 +317,7 @@ fn ver() {
                         corazon: None,
                         zzz: None,
                         notas: None,
+                        piensa: None,
                         forma,
                     };
                     arte::terminal(&arte::grid(e, &look), &colores)
@@ -469,6 +475,7 @@ fn cuerpo(e: &'static arte::Especie, celda: f32) -> (f32, f32, f32) {
         corazon: None,
         zzz: None,
         notas: None,
+        piensa: None,
         forma: arte::Forma::Normal,
     };
     let (x0, y0, x1, y1) =
@@ -496,6 +503,11 @@ struct App {
     /// le quitamos el teclado al soltarlo; en tanto tiempo puede volver a
     /// tomarlo
     foco_vuelve: Option<f32>,
+    /// cada cuánto ve cómo va Claude, cómo iba la vez pasada, y la pregunta
+    /// que dejaste para luego
+    cada_claude: f32,
+    claude_antes: std::collections::HashMap<String, claude::Estado>,
+    claude_ignorada: Option<(String, u64)>,
     /// el hilo que ve las letras de las terminales
     texto: texto::Compartido,
     shm: Shm,
@@ -636,6 +648,7 @@ impl App {
         let (w, h) = self.pantalla;
         self.letras();
         self.tick_teclado(dt);
+        self.tick_claude(dt);
         let mut looks = Vec::with_capacity(self.mascotas.len());
         for p in &mut self.mascotas {
             p.bicho.musica = musica;
@@ -790,6 +803,9 @@ fn vive(cfg: Config) -> Result<(), String> {
         teclado: None,
         super_apretado: false,
         foco_vuelve: None,
+        cada_claude: 0.0,
+        claude_antes: Default::default(),
+        claude_ignorada: None,
         texto: texto::arranca(),
         shm: Shm::bind(&globals, &qh).map_err(|_| "el compositor no tiene wl_shm")?,
         qh,

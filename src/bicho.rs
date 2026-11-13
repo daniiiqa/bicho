@@ -86,6 +86,8 @@ pub struct Bicho {
     pub dy: f32,
     /// platicando contigo (el globo de claudio): se queda quieto
     pub platica: bool,
+    /// Claude está trabajando (claudio): le salen puntitos
+    pub piensa: bool,
     /// metido en una ventana (su address): ahí vive, se mueve con ella y se
     /// esconde si la ventana no se ve
     pub dentro: Option<String>,
@@ -145,6 +147,7 @@ impl Bicho {
             cursor: None,
             dy: 0.0,
             platica: false,
+            piensa: false,
             dentro: None,
             oculto: false,
             repisas: Vec::new(),
@@ -732,6 +735,27 @@ impl Bicho {
         self.cariño_espera = 2.0;
     }
 
+    /// Anda escondido en una ventana de otro escritorio y hay que avisarte
+    /// algo: se sale y cae desde arriba donde estás tú.
+    pub fn sal_a_avisar(&mut self, ancho: f32) {
+        self.dentro = None;
+        self.oculto = false;
+        self.ancla = None;
+        self.sobre = None;
+        self.vuelve = None;
+        self.vx = 0.0;
+        self.vy = 0.0;
+        self.aparece(ancho);
+    }
+
+    /// Claude acabó: brinca contento con su corazón (si está libre).
+    pub fn celebra(&mut self) {
+        if !self.oculto && !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. } | Hace::Agarrado) {
+            let der = self.der;
+            self.cariño(der);
+        }
+    }
+
     /// Se pone a platicar: suelta un corazón y se queda quieto (si va en el
     /// aire, al caer) hasta que `platica` vuelva a ser false.
     pub fn platica(&mut self, der: bool) {
@@ -850,6 +874,7 @@ impl Bicho {
             corazon: (self.corazon > 0.0).then(|| 1.0 - self.corazon / CORAZON_DURA),
             zzz: (self.hace == Hace::Duerme).then_some(self.reloj),
             notas: (self.hace == Hace::Baila).then_some(self.reloj),
+            piensa: self.piensa.then_some(self.reloj),
         }
     }
 }
@@ -866,6 +891,7 @@ mod tests {
             origen: (0.0, 0.0),
             todas: vec![],
             clis: vec![],
+            pids: vec![],
         }
     }
 

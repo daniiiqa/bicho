@@ -400,6 +400,8 @@ pub struct Look {
     pub zzz: Option<f32>,
     /// fase de las notas (bailando)
     pub notas: Option<f32>,
+    /// fase de los puntitos de "pensando" (claudio, mientras Claude trabaja)
+    pub piensa: Option<f32>,
     /// cómo va deformado (solo los blanditos)
     pub forma: Forma,
 }
@@ -564,6 +566,13 @@ pub fn grid(e: &Especie, look: &Look) -> Grid {
             );
         }
     }
+    if let Some(t) = look.piensa {
+        // · ·· ··· y otra vez, encima de la cabeza
+        let n = (t * 2.5) as i32 % 4;
+        for k in 0..n {
+            sello(&mut g, &["x"], lado(5 + 2 * k, 1), (tope - 2).max(0), ZZZ);
+        }
+    }
     if let Some(t) = look.notas {
         for (k, col) in [(0.0, 1), (0.5, 11)] {
             let f = (t * 0.5 + k) % 1.0;
@@ -684,6 +693,7 @@ mod tests {
             corazon: None,
             zzz: None,
             notas: None,
+            piensa: None,
             forma: Forma::Normal,
         };
         for e in TODAS {
@@ -722,6 +732,7 @@ bbbbbbbbbbbbbbbb
                 corazon: None,
                 zzz: None,
                 notas: None,
+                piensa: None,
                 forma: Forma::Normal,
             };
             grid(&d, &look)
@@ -763,6 +774,7 @@ bbbbbbbbbbbbbbbb
                 corazon: None,
                 zzz: None,
                 notas: None,
+                piensa: None,
                 forma: Forma::Normal,
             };
             assert!(
