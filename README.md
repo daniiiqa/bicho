@@ -156,6 +156,9 @@ chmod +x ~/.local/bin/bicho
 bicho baba michi claudio
 ```
 
+Para actualizarlo: `bicho actualiza` (baja el compilado nuevo, revisa su
+sha256 y, si andan sueltos, los vuelve a soltar con el nuevo).
+
 Para que salgan al entrar: en KDE, *Preferencias del sistema → Inicio
 automático → Añadir → Añadir programa* y pon `bicho`. Con Claude Code,
 `bicho claude instala`; con bash, `bicho shell instala`.

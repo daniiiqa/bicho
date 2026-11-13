@@ -12,6 +12,7 @@
 //!   bicho ver          cómo se ven, en la terminal
 //!   bicho menu         el menú (jale), SUPER+Shift+B
 //!   bicho --auto       al iniciar sesión: los suelta si el menú dice que sí
+//!   bicho actualiza    baja el compilado nuevo de GitHub (actualiza.rs)
 //!   bicho claude instala|quita   los hooks de Claude Code, para que claudio
 //!                      sepa cómo va Claude (claude.rs, claudio.rs)
 //!   bicho shell instala|quita    una línea en ~/.bashrc para que se asusten
@@ -26,6 +27,7 @@
 //! brincan en las letras). Reaccionan a discada y a su terminal
 //! (reacciones.rs). ~/.config/bicho/<especie>.txt les cambia el dibujo.
 
+mod actualiza;
 mod arte;
 mod bicho;
 mod claude;
@@ -196,6 +198,8 @@ fn main() {
                 0
             }
         }
+        Some("actualiza" | "update") => actualiza::actualiza(),
+        Some("--version" | "-V" | "version") => actualiza::version(),
         Some("ver") => {
             ver();
             0
@@ -220,7 +224,8 @@ fn main() {
 fn uso() {
     let nombres: Vec<_> = arte::todas().iter().map(|e| e.nombre).collect();
     eprintln!(
-        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\n      bicho claude instala|quita   (los hooks de Claude Code, para claudio)\n      bicho shell instala|quita    (en ~/.bashrc: se asustan si truena un comando)\nespecies: {}",
+        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\n      bicho actualiza              (baja la versión nueva ya compilada)
+      bicho claude instala|quita   (los hooks de Claude Code, para claudio)\n      bicho shell instala|quita    (en ~/.bashrc: se asustan si truena un comando)\nespecies: {}",
         nombres.join(", ")
     );
 }

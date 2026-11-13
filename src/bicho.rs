@@ -143,6 +143,16 @@ const METERSE: f32 = 0.1;
 const SALIRSE: f32 = 0.06;
 /// en una terminal: chance de brincar a otra línea de letras
 const BRINCA_LETRAS: f32 = 0.35;
+/// afuera: chance de brincar a otra ventana (parkour)
+const BRINCA_VENTANAS: f32 = 0.3;
+/// desde el piso: chance de ir a treparse a una ventana
+const TREPA: f32 = 0.45;
+/// en la orilla de una ventana, sin a dónde brincar: chance de aventarse
+const AVIENTA: f32 = 0.25;
+/// lo que le alcanza un brinco (px): para arriba, para abajo y de lado
+const ALCANCE_ARRIBA: f32 = 170.0;
+const ALCANCE_ABAJO: f32 = 420.0;
+const ALCANCE_LADO: f32 = 320.0;
 /// cayendo más rápido que esto rebota en vez de quedarse
 const REBOTA: f32 = 900.0;
 /// lo más rápido que se puede aventar
@@ -301,7 +311,7 @@ impl Bicho {
     fn decide(&mut self, m: &Mundo, ancho: f32, alto: f32) {
         let r = self.azar();
         let piso = alto - m.abajo - self.ch;
-        if self.trepa && self.dentro.is_none() && self.sobre.is_none() && r < 0.22 {
+        if self.trepa && self.dentro.is_none() && self.sobre.is_none() && r < TREPA {
             // una ventana que llegue al piso y con lado libre en la pantalla
             let mut opciones = Vec::new();
             for v in &m.ventanas {
@@ -350,24 +360,30 @@ impl Bicho {
                 return;
             }
         }
-        // en una terminal: brinca a otra línea de letras que le quede cerca
-        if self.dentro.is_some() && self.azar() < BRINCA_LETRAS {
+        // parkour: brinca a otra ventana (o, en una terminal, a otra línea de
+        // letras) que le alcance; de preferencia, más arriba
+        let chance = if self.dentro.is_some() {
+            BRINCA_LETRAS
+        } else {
+            BRINCA_VENTANAS
+        };
+        if self.trepa && self.azar() < chance {
             let plats = self.plataformas(m, ancho, alto);
-            let cerca: Vec<&Plataforma> = plats
+            let cerca = self.alcanzables(&plats, None);
+            let arriba: Vec<&Plataforma> = cerca
                 .iter()
-                .filter(|p| {
-                    p.ventana != self.sobre
-                        && (p.y - self.y).abs() <= 170.0
-                        && (p.y - self.y).abs() > 4.0
-                })
-                .filter(|p| (self.x.clamp(p.x0, p.x1) - self.x).abs() <= 280.0)
+                .copied()
+                .filter(|p| p.y < self.y - 4.0)
                 .collect();
-            if !cerca.is_empty() {
-                let p = cerca[(self.azar() * cerca.len() as f32) as usize % cerca.len()];
-                // que caiga tantito adentro de la repisa, no en la orilla
-                let adentro = ((p.x1 - p.x0) * 0.15).min(20.0);
-                let tx = (self.x + self.entre(-60.0, 60.0)).clamp(p.x0 + adentro, p.x1 - adentro);
-                self.salta_a(tx, p.y);
+            let opciones = if !arriba.is_empty() && self.azar() < 0.65 {
+                arriba
+            } else {
+                cerca
+            };
+            if !opciones.is_empty() {
+                let p = opciones[(self.azar() * opciones.len() as f32) as usize % opciones.len()];
+                let (x0, x1, y) = (p.x0, p.x1, p.y);
+                self.brinca_a(x0, x1, y);
                 return;
             }
         }
@@ -732,8 +748,17 @@ impl Bicho {
             } else {
                 self.x - paso * 0.5 < p.x0
             };
-            if lejos && (self.sobre.is_none() || self.azar() < 0.4) {
-                self.der = !self.der;
+            if lejos {
+                // en la orilla: a otra ventana si le alcanza; si no, casi
+                // siempre se da la vuelta
+                let juega = matches!(self.hace, Hace::Juega { .. });
+                if !juega && let Some((x0, x1, y)) = self.la_mas_cerca(plats, self.der) {
+                    self.brinca_a(x0, x1, y);
+                    return;
+                }
+                if self.sobre.is_none() || self.azar() >= AVIENTA {
+                    self.der = !self.der;
+                }
             }
             self.carga = 0.3;
             self.vx = if self.der { paso * 1.6 } else { -paso * 1.6 };
@@ -745,7 +770,14 @@ impl Bicho {
         self.x += if self.der { paso } else { -paso } * dt;
         if self.x < p.x0 || self.x > p.x1 {
             self.x = self.x.clamp(p.x0, p.x1);
-            if self.sobre.is_some() && self.azar() < 0.6 {
+            // en la orilla: ¿hay a dónde brincar para allá? (jugando no: se
+            // acabaría el juego)
+            let juega = matches!(self.hace, Hace::Juega { .. });
+            if !juega && let Some((x0, x1, y)) = self.la_mas_cerca(plats, self.der) {
+                self.brinca_a(x0, x1, y);
+                return;
+            }
+            if self.sobre.is_some() && self.azar() < AVIENTA {
                 // se avienta
                 self.vx = if self.der { paso } else { -paso };
                 self.vy = -120.0;
@@ -780,6 +812,49 @@ impl Bicho {
         self.vuelve = None;
         self.vx = 0.0;
         self.vy = 0.0;
+    }
+
+    /// Las plataformas (ventanas, letras, el piso) a las que le alcanza un
+    /// brinco, sin contar en la que está. `hacia`: solo las que quedan para
+    /// ese lado (true: la derecha).
+    fn alcanzables<'a>(&self, plats: &'a [Plataforma], hacia: Option<bool>) -> Vec<&'a Plataforma> {
+        plats
+            .iter()
+            .filter(|p| {
+                let dy = p.y - self.y;
+                let dx = self.x.clamp(p.x0, p.x1) - self.x;
+                let otra = p.ventana != self.sobre || dy.abs() > 4.0;
+                let lado = match hacia {
+                    Some(true) => dx > 0.0,
+                    Some(false) => dx < 0.0,
+                    None => true,
+                };
+                otra && lado
+                    && (-ALCANCE_ARRIBA..=ALCANCE_ABAJO).contains(&dy)
+                    && dx.abs() <= ALCANCE_LADO
+            })
+            .collect()
+    }
+
+    /// La más cerquita para ese lado (para cuando llega a la orilla).
+    fn la_mas_cerca(&self, plats: &[Plataforma], der: bool) -> Option<(f32, f32, f32)> {
+        self.alcanzables(plats, Some(der))
+            .into_iter()
+            .min_by(|a, b| {
+                let d = |p: &Plataforma| {
+                    (self.x.clamp(p.x0, p.x1) - self.x).abs() + (p.y - self.y).abs() * 0.5
+                };
+                d(a).total_cmp(&d(b))
+            })
+            .map(|p| (p.x0, p.x1, p.y))
+    }
+
+    /// Brinca a una plataforma: cae tantito adentro de ella, no en la orilla.
+    fn brinca_a(&mut self, x0: f32, x1: f32, y: f32) {
+        let adentro = ((x1 - x0) * 0.15).min(24.0);
+        let tx = (self.x + self.entre(-60.0, 60.0))
+            .clamp(x0 + adentro, (x1 - adentro).max(x0 + adentro));
+        self.salta_a(tx, y);
     }
 
     /// Un brinco que cae en (tx, ty): sube un poco más alto que eso y cae
@@ -1718,6 +1793,64 @@ mod tests {
         assert_eq!(
             crate::arte::caja(&crate::arte::grid(e, &look)),
             crate::arte::caja(&crate::arte::grid(e, &sin))
+        );
+    }
+
+    #[test]
+    fn hacen_parkour_entre_ventanas_y_casi_no_se_caen() {
+        // dos ventanas lado a lado, como en mosaico, que llegan al piso
+        let vs = vec![
+            Ventana {
+                id: "a".into(),
+                x: 10.0,
+                y: 200.0,
+                w: 940.0,
+                h: 990.0,
+            },
+            Ventana {
+                id: "b".into(),
+                x: 960.0,
+                y: 200.0,
+                w: 940.0,
+                h: 990.0,
+            },
+        ];
+        let m = mundo(vs);
+        let (mut visitaron_b, mut en_el_piso, mut total) = (0, 0, 0);
+        for k in 0..10u64 {
+            // (semillas impares distintas: la de un bicho es semilla | 1)
+            let mut b = Bicho::new(3.0, 48.0, 60.0, 2 * k + 1);
+            (b.x, b.y) = (400.0, 200.0 - 1.0 - 60.0);
+            b.sobre = Some("a".into());
+            (b.hace, b.falta, b.der) = (Hace::Camina, 5.0, true);
+            let mut fue_a_b = false;
+            for _ in 0..(120.0 / 0.033) as usize {
+                b.tick(0.033, &m, 1920.0, 1200.0, None);
+                fue_a_b |= b.sobre.as_deref() == Some("b");
+                total += 1;
+                if b.dentro.is_none()
+                    && b.sobre.is_none()
+                    && b.hace != Hace::Vuela
+                    && !matches!(b.hace, Hace::Trepa { .. } | Hace::VaATrepar { .. })
+                {
+                    en_el_piso += 1;
+                }
+            }
+            visitaron_b += usize::from(fue_a_b);
+        }
+        assert!(
+            visitaron_b >= 4,
+            "casi no brincan a la otra ventana: {visitaron_b}/10"
+        );
+        let piso = en_el_piso as f32 / total as f32;
+        assert!(
+            piso < 0.1,
+            "pasan mucho tiempo en el piso: {:.0}%",
+            piso * 100.0
+        );
+        println!(
+            "PARKOUR: {visitaron_b}/10 fueron a la otra ventana; {:.0}% del tiempo en el piso",
+            piso * 100.0
         );
     }
 
