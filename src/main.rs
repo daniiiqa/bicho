@@ -12,12 +12,19 @@
 //!   bicho ver          cómo se ven, en la terminal
 //!   bicho menu         el menú (jale), SUPER+Shift+B
 //!   bicho --auto       al iniciar sesión: los suelta si el menú dice que sí
+//!   bicho claude instala|quita   los hooks de Claude Code, para que claudio
+//!                      sepa cómo va Claude (claude.rs, claudio.rs)
+//!   bicho shell instala|quita    una línea en ~/.bashrc para que se asusten
+//!                      si truena un comando en su terminal (shell.rs)
 //!
 //! ~/.config/bicho/config.json:
 //!   {"pets": ["bicho", "michi"], "scale": 3, "speed": 1.0, "climb": true,
 //!    "dance": true, "login": false}
 //! Solo su cuerpo agarra clics (lo demás de la capa deja pasar el mouse): con
-//! un clic les das cariño; si los arrastras y los sueltas, salen volando.
+//! un clic les das cariño; si los arrastras y los sueltas, salen volando; con
+//! SUPER apretado al soltarlos se meten a la ventana (y en una terminal
+//! brincan en las letras). Reaccionan a discada y a su terminal
+//! (reacciones.rs). ~/.config/bicho/<especie>.txt les cambia el dibujo.
 
 mod arte;
 mod bicho;
@@ -28,6 +35,8 @@ mod globo;
 mod hypr;
 mod menu;
 mod mouse;
+mod reacciones;
+mod shell;
 mod texto;
 mod ventanas;
 
@@ -59,7 +68,7 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -163,7 +172,19 @@ fn main() {
         }
         Some("menu") => menu::menu(),
         // lo que corren los hooks de Claude Code
-        Some("claude") => claude::hook(resto.first().map_or("", String::as_str)),
+        Some("shell") => match resto.first().map(String::as_str) {
+            Some("instala" | "install") => shell::instala(true),
+            Some("quita" | "uninstall") => shell::instala(false),
+            _ => {
+                eprintln!("uso: bicho shell instala|quita");
+                1
+            }
+        },
+        Some("claude") => match resto.first().map(String::as_str) {
+            Some("instala" | "install") => claude::instala(true),
+            Some("quita" | "uninstall") => claude::instala(false),
+            e => claude::hook(e.unwrap_or("")),
+        },
         Some("--auto") => {
             if menu::al_iniciar() {
                 suelta(&[])
@@ -195,7 +216,7 @@ fn main() {
 fn uso() {
     let nombres: Vec<_> = arte::todas().iter().map(|e| e.nombre).collect();
     eprintln!(
-        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\n      bicho claude trabajando|listo|pregunta|fin   (para los hooks de Claude Code)\nespecies: {}",
+        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\n      bicho claude instala|quita   (los hooks de Claude Code, para claudio)\n      bicho shell instala|quita    (en ~/.bashrc: se asustan si truena un comando)\nespecies: {}",
         nombres.join(", ")
     );
 }
@@ -282,6 +303,8 @@ fn ver() {
                     zzz,
                     notas,
                     piensa: None,
+                    alerta: None,
+                    reloj: None,
                     forma: arte::Forma::Normal,
                 };
                 arte::terminal(&arte::grid(e, &look), &colores)
@@ -318,6 +341,8 @@ fn ver() {
                         zzz: None,
                         notas: None,
                         piensa: None,
+                        alerta: None,
+                        reloj: None,
                         forma,
                     };
                     arte::terminal(&arte::grid(e, &look), &colores)
@@ -476,6 +501,8 @@ fn cuerpo(e: &'static arte::Especie, celda: f32) -> (f32, f32, f32) {
         zzz: None,
         notas: None,
         piensa: None,
+        alerta: None,
+        reloj: None,
         forma: arte::Forma::Normal,
     };
     let (x0, y0, x1, y1) =
@@ -508,6 +535,16 @@ struct App {
     cada_claude: f32,
     claude_antes: std::collections::HashMap<String, claude::Estado>,
     claude_ignorada: Option<(String, u64)>,
+    /// lo que hay que vigilar para las reacciones (reacciones.rs)
+    cada_reaccion: f32,
+    cada_chapa: f32,
+    susto_pendiente: bool,
+    bloqueada: bool,
+    arre_mtime: Option<SystemTime>,
+    arre_next: Option<u64>,
+    compilando: HashMap<String, (bool, f32)>,
+    /// cuándo tronó lo último en cada shell (bicho shell): pid → hora
+    truenos: HashMap<i32, u64>,
     /// el hilo que ve las letras de las terminales
     texto: texto::Compartido,
     shm: Shm,
@@ -634,6 +671,8 @@ impl App {
             let m = mtime(&colores_path());
             if m != self.colores_mtime {
                 self.colores_mtime = m;
+                // cambió el look: susto (cuando se quite el telón)
+                self.susto_pendiente = true;
                 for p in &mut self.mascotas {
                     p.colores = colores(p.especie);
                 }
@@ -649,6 +688,7 @@ impl App {
         self.letras();
         self.tick_teclado(dt);
         self.tick_claude(dt);
+        self.tick_reacciones(dt);
         let mut looks = Vec::with_capacity(self.mascotas.len());
         for p in &mut self.mascotas {
             p.bicho.musica = musica;
@@ -752,6 +792,8 @@ impl App {
 
 fn run(pets: &[String]) -> Result<(), String> {
     std::panic::set_hook(Box::new(|info| bitacora(&format!("tronó: {info}"))));
+    // donde el shell deja sus "truena" (bicho shell) y los hooks de Claude
+    let _ = std::fs::create_dir_all(runtime().join("bicho"));
     // nunca dos a la vez
     if let Some(otro) = running()
         && otro != std::process::id() as i32
@@ -806,6 +848,14 @@ fn vive(cfg: Config) -> Result<(), String> {
         cada_claude: 0.0,
         claude_antes: Default::default(),
         claude_ignorada: None,
+        cada_reaccion: 0.0,
+        cada_chapa: 0.0,
+        susto_pendiente: false,
+        bloqueada: false,
+        arre_mtime: None,
+        arre_next: None,
+        compilando: HashMap::new(),
+        truenos: HashMap::new(),
         texto: texto::arranca(),
         shm: Shm::bind(&globals, &qh).map_err(|_| "el compositor no tiene wl_shm")?,
         qh,

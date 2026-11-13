@@ -400,8 +400,12 @@ pub struct Look {
     pub zzz: Option<f32>,
     /// fase de las notas (bailando)
     pub notas: Option<f32>,
-    /// fase de los puntitos de "pensando" (claudio, mientras Claude trabaja)
+    /// fase de la laptop (claudio sentado, mientras Claude trabaja)
     pub piensa: Option<f32>,
+    /// 0..1 mientras le dura el "!" (susto, aviso)
+    pub alerta: Option<f32>,
+    /// fase del relojito (esperando a que acabe de compilar)
+    pub reloj: Option<f32>,
     /// cómo va deformado (solo los blanditos)
     pub forma: Forma,
 }
@@ -510,6 +514,16 @@ fn sello(g: &mut Grid, dibujo: &[&str], col: i32, renglon: i32, color: u8) {
 
 const CORAZON_DIBUJO: [&str; 4] = [".r.r.", "rrrrr", ".rrr.", "..r.."];
 const Z_DIBUJO: [&str; 3] = ["zzz", ".z.", "zzz"];
+const ALERTA_DIBUJO: [&str; 5] = ["r", "r", "r", ".", "r"];
+/// el relojito de esperar: la manecilla da la vuelta
+const RELOJ_DIBUJO: [[&str; 5]; 4] = [
+    [".zzz.", "z.z.z", "z.z.z", "z...z", ".zzz."],
+    [".zzz.", "z...z", "z.zzz", "z...z", ".zzz."],
+    [".zzz.", "z...z", "z.z.z", "z.z.z", ".zzz."],
+    [".zzz.", "z...z", "zzz.z", "z...z", ".zzz."],
+];
+/// la luz de la pantalla de la laptop de claudio, cuadro por cuadro
+const LUZ_LAPTOP: [&str; 4] = ["hhhhhhhh", "hhh.hhhh", "hhhhh.hh", "h.hhhhhh"];
 const NOTA_DIBUJO: [&str; 4] = ["..xx", "..x.", "xxx.", "xx.."];
 
 /// Primer renglón con algo del cuerpo (para poner cosas encima).
@@ -567,11 +581,33 @@ pub fn grid(e: &Especie, look: &Look) -> Grid {
         }
     }
     if let Some(t) = look.piensa {
-        // · ·· ··· y otra vez, encima de la cabeza
-        let n = (t * 2.5) as i32 % 4;
-        for k in 0..n {
-            sello(&mut g, &["x"], lado(5 + 2 * k, 1), (tope - 2).max(0), ZZZ);
+        // su laptop, vista desde atrás: tapa oscura con su logo y la luz de
+        // la pantalla en la orilla, que cambia como texto que se recorre
+        let luz = LUZ_LAPTOP[(t * 5.0) as usize % LUZ_LAPTOP.len()];
+        let tapa = [luz, "oooooooo", "oooohooo", "oooooooo"];
+        for (dy, f) in tapa.iter().enumerate() {
+            for (dx, c) in f.chars().enumerate() {
+                let (x, y) = (4 + dx, ALTO - tapa.len() + dy);
+                if c != '.' {
+                    g[y][x] = celda(c);
+                }
+            }
         }
+    }
+    if let Some(p) = look.alerta {
+        // el "!" brinca tantito al salir
+        let sube = if p < 0.15 { 1 } else { 0 };
+        sello(
+            &mut g,
+            &ALERTA_DIBUJO,
+            lado(10, 1),
+            (tope - 6).max(0) - sube,
+            CORAZON,
+        );
+    }
+    if let Some(t) = look.reloj {
+        let cuadro = &RELOJ_DIBUJO[(t * 1.5) as usize % RELOJ_DIBUJO.len()];
+        sello(&mut g, cuadro, lado(10, 5), (tope - 6).max(0), ZZZ);
     }
     if let Some(t) = look.notas {
         for (k, col) in [(0.0, 1), (0.5, 11)] {
@@ -694,6 +730,8 @@ mod tests {
             zzz: None,
             notas: None,
             piensa: None,
+            alerta: None,
+            reloj: None,
             forma: Forma::Normal,
         };
         for e in TODAS {
@@ -733,6 +771,8 @@ bbbbbbbbbbbbbbbb
                 zzz: None,
                 notas: None,
                 piensa: None,
+                alerta: None,
+                reloj: None,
                 forma: Forma::Normal,
             };
             grid(&d, &look)
@@ -775,6 +815,8 @@ bbbbbbbbbbbbbbbb
                 zzz: None,
                 notas: None,
                 piensa: None,
+                alerta: None,
+                reloj: None,
                 forma: Forma::Normal,
             };
             assert!(

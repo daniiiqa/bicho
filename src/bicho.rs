@@ -86,8 +86,14 @@ pub struct Bicho {
     pub dy: f32,
     /// platicando contigo (el globo de claudio): se queda quieto
     pub platica: bool,
-    /// Claude está trabajando (claudio): le salen puntitos
+    /// Claude está trabajando (claudio): se sienta con su laptop
     pub piensa: bool,
+    /// en su terminal están compilando: se sienta a esperar con su relojito
+    pub espera: bool,
+    /// lo que le queda al "!" (s)
+    alerta: f32,
+    /// lo durmió chapa: al despertar se despereza contento
+    desperezo: bool,
     /// metido en una ventana (su address): ahí vive, se mueve con ella y se
     /// esconde si la ventana no se ve
     pub dentro: Option<String>,
@@ -100,6 +106,8 @@ pub struct Bicho {
 }
 
 const CORAZON_DURA: f32 = 1.3;
+/// cuánto le dura el "!"
+const ALERTA_DURA: f32 = 1.4;
 /// cuánto tiene que estar el cursor quieto cerca para que brinque de cariño
 const CARIÑO_QUIETO: f32 = 0.7;
 const GRAVEDAD: f32 = 1400.0;
@@ -148,6 +156,9 @@ impl Bicho {
             dy: 0.0,
             platica: false,
             piensa: false,
+            espera: false,
+            alerta: 0.0,
+            desperezo: false,
             dentro: None,
             oculto: false,
             repisas: Vec::new(),
@@ -377,6 +388,7 @@ impl Bicho {
         self.aterrizo += dt;
         self.falta -= dt;
         self.corazon = (self.corazon - dt).max(0.0);
+        self.alerta = (self.alerta - dt).max(0.0);
         self.cariño_espera = (self.cariño_espera - dt).max(0.0);
         self.parpadeo = (self.parpadeo - dt).max(0.0);
         self.prox_parpadeo -= dt;
@@ -451,6 +463,22 @@ impl Bicho {
             }
         }
 
+        // Claude trabajando: claudio se sienta con su laptop (y ahí se queda
+        // mientras dure)
+        if (self.piensa || self.espera)
+            && matches!(
+                self.hace,
+                Hace::Camina
+                    | Hace::Para
+                    | Hace::Persigue
+                    | Hace::Duerme
+                    | Hace::Baila
+                    | Hace::Sienta
+            )
+        {
+            self.hace = Hace::Sienta;
+            self.falta = self.falta.max(0.5);
+        }
         match self.hace.clone() {
             // lo mueve el mouse (arrastra); aquí nomás espera
             Hace::Agarrado => {}
@@ -489,7 +517,12 @@ impl Bicho {
                 }
             }
             Hace::Duerme => {
-                if self.falta <= 0.0 {
+                if self.falta <= 0.0 && self.desperezo {
+                    // lo había dormido chapa: se despierta contento
+                    self.desperezo = false;
+                    let der = self.der;
+                    self.cariño(der);
+                } else if self.falta <= 0.0 {
                     self.decide(m, ancho, alto);
                 }
             }
@@ -748,6 +781,58 @@ impl Bicho {
         self.aparece(ancho);
     }
 
+    fn libre(&self) -> bool {
+        !self.oculto && !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. } | Hace::Agarrado)
+    }
+
+    /// ¡Susto! (cambió el look, salió un error en su terminal): brinca con
+    /// un "!".
+    pub fn asusta(&mut self) {
+        if self.oculto {
+            return;
+        }
+        self.alerta = ALERTA_DURA;
+        if self.libre() {
+            self.vy = -380.0;
+            self.vx = 0.0;
+            self.vuelve = None;
+            self.hace = Hace::Vuela;
+        }
+    }
+
+    /// Te avisa algo (llegó una notificación): voltea hacia allá con un "!"
+    /// y da un brinquito.
+    pub fn avisa(&mut self, der: bool) {
+        if !self.libre() {
+            return;
+        }
+        self.der = der;
+        self.alerta = ALERTA_DURA;
+        self.vy = -240.0;
+        self.vx = 0.0;
+        self.vuelve = Some(Hace::Para);
+        self.falta = 2.0;
+        self.hace = Hace::Vuela;
+    }
+
+    /// Bloqueaste la sesión: a dormir (hasta que vuelvas).
+    pub fn a_dormir(&mut self) {
+        if self.libre() {
+            self.hace = Hace::Duerme;
+            self.falta = f32::MAX;
+            self.desperezo = true;
+        }
+    }
+
+    /// Volviste: los que durmió chapa se despiertan, cada quien a su tiempo.
+    pub fn despierta(&mut self) {
+        if self.desperezo && self.hace == Hace::Duerme {
+            self.falta = self.entre(0.6, 2.2);
+        } else {
+            self.desperezo = false;
+        }
+    }
+
     /// Claude acabó: brinca contento con su corazón (si está libre).
     pub fn celebra(&mut self) {
         if !self.oculto && !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. } | Hace::Agarrado) {
@@ -874,7 +959,9 @@ impl Bicho {
             corazon: (self.corazon > 0.0).then(|| 1.0 - self.corazon / CORAZON_DURA),
             zzz: (self.hace == Hace::Duerme).then_some(self.reloj),
             notas: (self.hace == Hace::Baila).then_some(self.reloj),
-            piensa: self.piensa.then_some(self.reloj),
+            piensa: (self.piensa && self.hace == Hace::Sienta).then_some(self.reloj),
+            alerta: (self.alerta > 0.0).then(|| 1.0 - self.alerta / ALERTA_DURA),
+            reloj: (self.espera && !self.piensa && self.hace == Hace::Sienta).then_some(self.reloj),
         }
     }
 }
@@ -887,6 +974,7 @@ mod tests {
         Mundo {
             ventanas,
             abajo: 0.0,
+            arriba: 0.0,
             borde: 1.0,
             origen: (0.0, 0.0),
             todas: vec![],
@@ -1153,6 +1241,68 @@ mod tests {
             brinco |= b.hace == Hace::Vuela;
         }
         assert!(brinco, "no le dio cariño");
+    }
+
+    fn en_el_piso(semilla: u64) -> Bicho {
+        let mut b = Bicho::new(3.0, 48.0, 60.0, semilla);
+        (b.x, b.y, b.hace, b.falta) = (900.0, 1140.0, Hace::Camina, 5.0);
+        b
+    }
+
+    #[test]
+    fn de_un_susto_brinca_con_su_alerta() {
+        let m = mundo(vec![]);
+        let mut b = en_el_piso(12);
+        b.asusta();
+        let look = b.tick(0.033, &m, 1920.0, 1200.0, None);
+        assert_eq!(b.hace, Hace::Vuela);
+        assert!(look.alerta.is_some());
+        for _ in 0..80 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        assert!(
+            b.tick(0.033, &m, 1920.0, 1200.0, None).alerta.is_none(),
+            "el ! se quita solo"
+        );
+    }
+
+    #[test]
+    fn con_chapa_se_duerme_y_al_volver_despierta_contento() {
+        let m = mundo(vec![]);
+        let mut b = en_el_piso(13);
+        b.a_dormir();
+        for _ in 0..300 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+            assert_eq!(b.hace, Hace::Duerme, "bloqueado no se despierta");
+        }
+        b.despierta();
+        let mut corazon = false;
+        for _ in 0..120 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+            corazon |= b.corazon > 0.0;
+        }
+        assert!(corazon, "no se despertó contento");
+    }
+
+    #[test]
+    fn con_claude_trabajando_se_sienta_con_su_laptop_y_compilando_con_su_reloj() {
+        let m = mundo(vec![]);
+        let mut b = en_el_piso(14);
+        b.piensa = true;
+        let look = b.tick(0.033, &m, 1920.0, 1200.0, None);
+        assert_eq!(b.hace, Hace::Sienta);
+        assert!(look.piensa.is_some() && look.reloj.is_none());
+        // ya no trabaja, pero compilan en su terminal: relojito
+        b.piensa = false;
+        b.espera = true;
+        let look = b.tick(0.033, &m, 1920.0, 1200.0, None);
+        assert!(look.piensa.is_none() && look.reloj.is_some());
+        // acabó: al rato se levanta
+        b.espera = false;
+        for _ in 0..400 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        assert_ne!(b.hace, Hace::Sienta);
     }
 
     #[test]

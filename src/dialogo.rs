@@ -199,14 +199,24 @@ impl App {
                 zzz: None,
                 notas: None,
                 piensa: None,
+                alerta: None,
+                reloj: None,
                 forma: arte::Forma::Normal,
             },
         ))
         .map_or(0.0, |c| c.1 as f32 * s);
         let centro = b.x + b.cw / 2.0;
         let x = (centro - gw / 2.0).clamp(4.0, (self.pantalla.0 - gw - 4.0).max(4.0));
+        // que no quede debajo de la barra de arriba; ya volteado, regresa
+        // arriba solo si sobra espacio (si no, al brincar parpadearía)
         let arriba = b.y + tope - gh - s;
-        d.globo.cola_arriba = arriba < 4.0;
+        let limite = self.mundo.arriba + 4.0;
+        let cabe = if d.globo.cola_arriba {
+            arriba >= limite + 24.0
+        } else {
+            arriba >= limite
+        };
+        d.globo.cola_arriba = !cabe;
         let y = if d.globo.cola_arriba {
             (b.y + b.ch + s).min(self.pantalla.1 - gh - 4.0).max(4.0)
         } else {

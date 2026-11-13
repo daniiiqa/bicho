@@ -62,6 +62,8 @@ pub struct Mundo {
     pub ventanas: Vec<Ventana>,
     /// lo que reservan las barras abajo
     pub abajo: f32,
+    /// y arriba (la barra de arriba, empalme)
+    pub arriba: f32,
     pub borde: f32,
     /// dónde empieza el monitor (para el cursor)
     pub origen: (f32, f32),
@@ -155,6 +157,7 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
     Mundo {
         ventanas,
         abajo: f(&m["reserved"][3]),
+        arriba: f(&m["reserved"][1]),
         borde,
         origen: (mx, my),
         todas,
@@ -197,6 +200,51 @@ pub fn ventana_en(monitor: &str, x: f32, y: f32) -> Option<String> {
         .map(String::from)
 }
 
+/// ¿Hay alguna capa (layer-shell) con ese namespace? (el telón de farula)
+pub fn hay_capa(namespace: &str) -> bool {
+    fn busca(v: &Value, ns: &str) -> bool {
+        match v {
+            Value::Object(o) => {
+                o.get("namespace").and_then(Value::as_str) == Some(ns)
+                    || o.values().any(|x| busca(x, ns))
+            }
+            Value::Array(a) => a.iter().any(|x| busca(x, ns)),
+            _ => false,
+        }
+    }
+    busca(&pide("layers"), namespace)
+}
+
+/// Lo que cuenta como "compilando" (o actualizando): mientras corre, los de
+/// esa terminal esperan con su relojito.
+const COMPILADORES: &[&str] = &[
+    "cargo", "rustc", "make", "cmake", "ninja", "meson", "gcc", "g++", "cc1", "cc1plus", "clang",
+    "go", "zig", "tsc", "gradle", "mvn", "npm", "pnpm", "yarn", "makepkg", "pacman", "paru", "yay",
+    "carbon",
+];
+
+/// ¿Algún proceso de esa ventana está compilando?
+pub fn compilando(pid: i32) -> bool {
+    let mut pila = vec![(pid, 0)];
+    while let Some((p, hondo)) = pila.pop() {
+        let comm = std::fs::read_to_string(format!("/proc/{p}/comm")).unwrap_or_default();
+        if hondo > 0 && COMPILADORES.contains(&comm.trim()) {
+            return true;
+        }
+        if hondo < 12 {
+            let hijos =
+                std::fs::read_to_string(format!("/proc/{p}/task/{p}/children")).unwrap_or_default();
+            pila.extend(
+                hijos
+                    .split_whitespace()
+                    .filter_map(|h| h.parse().ok())
+                    .map(|h| (h, hondo + 1)),
+            );
+        }
+    }
+    false
+}
+
 /// La ventana que tiene el foco (su address).
 pub fn activa() -> Option<String> {
     pide("activewindow")["address"].as_str().map(String::from)
@@ -214,6 +262,29 @@ pub fn enfoca(id: &str) {
             .stderr(std::process::Stdio::null())
             .status();
     }
+}
+
+/// La ventana de un proceso: sube por sus papás hasta dar con el de una
+/// ventana.
+pub fn ventana_del_proceso(m: &Mundo, pid: i32) -> Option<String> {
+    let mut p = pid;
+    for _ in 0..32 {
+        if let Some((id, _)) = m.pids.iter().find(|(_, q)| *q == p) {
+            return Some(id.clone());
+        }
+        let stat = std::fs::read_to_string(format!("/proc/{p}/stat")).ok()?;
+        p = stat
+            .rsplit_once(')')?
+            .1
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()?;
+        if p <= 1 {
+            return None;
+        }
+    }
+    None
 }
 
 /// La ventana donde anda alguno de estos procesos (el primero que sea de una
