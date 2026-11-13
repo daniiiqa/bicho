@@ -65,6 +65,29 @@ pub struct Mundo {
     pub borde: f32,
     /// dónde empieza el monitor (para el cursor)
     pub origen: (f32, f32),
+    /// todas las ventanas abiertas, en cualquier escritorio (su address):
+    /// para saber si una que no se ve está en otro lado o ya la cerraron
+    pub todas: Vec<String>,
+    /// las que son terminales (ahí las letras son repisas)
+    pub clis: Vec<String>,
+}
+
+/// ¿La ventana de ese pid es una terminal?
+fn es_terminal(pid: i64) -> bool {
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+    matches!(
+        comm.trim(),
+        "kitty"
+            | "foot"
+            | "alacritty"
+            | "wezterm-gui"
+            | "ghostty"
+            | "konsole"
+            | "gnome-terminal-"
+            | "xterm"
+            | "st"
+            | "urxvt"
+    )
 }
 
 pub fn mundo(monitor: &str, borde: f32) -> Mundo {
@@ -86,6 +109,12 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
         None => c["workspace"]["id"].as_i64() == ws,
     };
     let clientes = pide("clients");
+    let todas = clientes
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c["address"].as_str().map(String::from))
+        .collect();
     let ventanas = clientes
         .as_array()
         .into_iter()
@@ -103,12 +132,99 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
             h: f(&c["size"][1]),
         })
         .collect();
+    let clis = clientes
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| cuenta(c) && es_terminal(c["pid"].as_i64().unwrap_or(0)))
+        .filter_map(|c| c["address"].as_str().map(String::from))
+        .collect();
     Mundo {
         ventanas,
         abajo: f(&m["reserved"][3]),
         borde,
         origen: (mx, my),
+        todas,
+        clis,
     }
+}
+
+/// La ventana que se ve en (x, y) (coordenadas del monitor) en el escritorio
+/// de ahorita: su address. Si se enciman, la que tuvo el foco más reciente.
+pub fn ventana_en(monitor: &str, x: f32, y: f32) -> Option<String> {
+    let mons = pide("monitors");
+    let m = mons.as_array()?.iter().find(|m| m["name"] == monitor)?;
+    let (gx, gy) = (x + f(&m["x"]), y + f(&m["y"]));
+    let ws = m["activeWorkspace"]["id"].as_i64();
+    let especial = m["specialWorkspace"]["name"]
+        .as_str()
+        .filter(|s| !s.is_empty());
+    let clientes = pide("clients");
+    clientes
+        .as_array()?
+        .iter()
+        .filter(|c| c["mapped"].as_bool() == Some(true) && c["hidden"].as_bool() != Some(true))
+        .filter(|c| match especial {
+            Some(e) => c["workspace"]["name"].as_str() == Some(e),
+            None => c["workspace"]["id"].as_i64() == ws,
+        })
+        .filter(|c| {
+            let (cx, cy, w, h) = (
+                f(&c["at"][0]),
+                f(&c["at"][1]),
+                f(&c["size"][0]),
+                f(&c["size"][1]),
+            );
+            gx >= cx && gx < cx + w && gy >= cy && gy < cy + h
+        })
+        .filter(|c| c["fullscreen"].as_i64().unwrap_or(0) == 0)
+        .min_by_key(|c| c["focusHistoryID"].as_i64().unwrap_or(i64::MAX))
+        .and_then(|c| c["address"].as_str())
+        .map(String::from)
+}
+
+/// El pid de la ventana con ese address.
+pub fn pid_de(id: &str) -> Option<i32> {
+    pide("clients")
+        .as_array()?
+        .iter()
+        .find(|c| c["address"].as_str() == Some(id))?["pid"]
+        .as_i64()
+        .map(|p| p as i32)
+}
+
+/// En qué carpeta anda una ventana: la del proceso más adentro (la terminal
+/// → el shell → nvim, claude, taco…). Los ayudantes de kitty no cuentan, ni
+/// los procesos que ya se murieron.
+pub fn carpeta(pid: i32) -> Option<PathBuf> {
+    fn hijos(pid: i32) -> Vec<i32> {
+        std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|p| p.parse().ok())
+            .collect()
+    }
+    fn cwd(pid: i32) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .filter(|p| p.is_dir())
+    }
+    fn cuenta(pid: i32) -> bool {
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        comm.trim() != "kitten" && cwd(pid).is_some()
+    }
+    // a lo hondo; el más hondo gana (y entre iguales, el más nuevo)
+    let mut mejor = (0usize, pid);
+    let mut pila = vec![(pid, 0usize)];
+    while let Some((p, hondo)) = pila.pop() {
+        if hondo > 0 && cuenta(p) && (hondo, p) > mejor {
+            mejor = (hondo, p);
+        }
+        if hondo < 12 {
+            pila.extend(hijos(p).into_iter().map(|h| (h, hondo + 1)));
+        }
+    }
+    cwd(mejor.1)
 }
 
 pub fn borde() -> f32 {
@@ -122,4 +238,24 @@ pub fn cursor(origen: (f32, f32)) -> Option<(f32, f32)> {
     let c = pide("cursorpos");
     c.is_object()
         .then(|| (f(&c["x"]) - origen.0, f(&c["y"]) - origen.1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn la_carpeta_es_la_del_proceso_mas_adentro() {
+        // yo → sh (en /tmp) → sleep (en /usr): gana el más hondo
+        let mut hijo = std::process::Command::new("sh")
+            .args(["-c", "cd /usr && exec sleep 5 & wait"])
+            .current_dir("/tmp")
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let dir = carpeta(hijo.id() as i32);
+        let _ = hijo.kill();
+        let _ = hijo.wait();
+        assert_eq!(dir, Some(PathBuf::from("/usr")));
+    }
 }

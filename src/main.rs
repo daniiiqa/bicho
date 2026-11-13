@@ -4,7 +4,7 @@
 //! si suena música, a veces persiguen al cursor, y si se lo acercas brincan
 //! con un corazón. Si dos se topan, se saludan. Toman los colores del look.
 //!
-//!   bicho [especie…]   los suelta (bicho, michi, baba; sin nombre, los de
+//!   bicho [especie…]   los suelta (bicho, michi, baba, claudio; sin nombre, los de
 //!                      la config). Si ya andan, los cambia por esos
 //!   bicho más ESPECIE  suelta uno más
 //!   bicho off          los guarda
@@ -16,26 +16,38 @@
 //! ~/.config/bicho/config.json:
 //!   {"pets": ["bicho", "michi"], "scale": 3, "speed": 1.0, "climb": true,
 //!    "dance": true, "login": false}
-//! No agarran clics: son capas con la región de input vacía.
+//! Solo su cuerpo agarra clics (lo demás de la capa deja pasar el mouse): con
+//! un clic les das cariño; si los arrastras y los sueltas, salen volando.
 
 mod arte;
 mod bicho;
+mod dialogo;
+mod globo;
 mod hypr;
 mod menu;
+mod mouse;
+mod texto;
+mod ventanas;
 
 use serde_json::Value;
 use smithay_client_toolkit::reexports::calloop::EventLoop;
 use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
-use smithay_client_toolkit::reexports::client::protocol::{wl_output, wl_shm, wl_surface};
-use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
+use smithay_client_toolkit::reexports::client::protocol::{
+    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
+};
+use smithay_client_toolkit::reexports::client::{Connection, Dispatch, QueueHandle};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     delegate_registry,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+    },
     shell::{
         WaylandSurface,
         wlr_layer::{
@@ -45,13 +57,19 @@ use smithay_client_toolkit::{
     },
     shm::{Shm, ShmHandler, slot::SlotPool},
 };
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
+/// un cuadro cuando nomás andan caminando
 const CUADRO: Duration = Duration::from_millis(33);
+/// y cuando algo se tiene que ver fluido (pegados a una ventana, agarrados,
+/// el globo): al ritmo de la pantalla
+const CUADRO_RAPIDO: Duration = Duration::from_millis(16);
+const BOTON_IZQ: u32 = 0x110;
 
 fn runtime() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from)
@@ -171,7 +189,7 @@ fn main() {
 }
 
 fn uso() {
-    let nombres: Vec<_> = arte::TODAS.iter().map(|e| e.nombre).collect();
+    let nombres: Vec<_> = arte::todas().iter().map(|e| e.nombre).collect();
     eprintln!(
         "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\nespecies: {}",
         nombres.join(", ")
@@ -247,7 +265,7 @@ fn ver() {
         ("baila", Pose::Parado, None, None, Some(0.2)),
         ("duerme", Pose::Duerme, None, Some(0.3), None),
     ];
-    for e in arte::TODAS {
+    for &e in arte::todas() {
         let colores = colores(e);
         let grids: Vec<Vec<String>> = poses
             .iter()
@@ -359,7 +377,13 @@ fn colores(e: &arte::Especie) -> [u32; arte::COLORES] {
         .unwrap_or(Value::Null);
     let rgb = |keys: &[&str], def: u32| -> u32 {
         keys.iter()
-            .find_map(|k| c[k].as_str())
+            .find_map(|k| {
+                if k.starts_with('#') {
+                    Some(*k)
+                } else {
+                    c[k].as_str()
+                }
+            })
             .and_then(|h| u32::from_str_radix(h.trim_start_matches('#'), 16).ok())
             .unwrap_or(def)
     };
@@ -427,6 +451,33 @@ struct Mascota {
     bicho: bicho::Bicho,
     colores: [u32; arte::COLORES],
     margen: (i32, i32),
+    /// el rectángulo que agarra clics (x, y, ancho, alto en la capa)
+    region: Option<(i32, i32, i32, i32)>,
+    /// su cuerpo parado dentro del lienzo: columnas (x0, x1) y alto, en px
+    cuerpo: (f32, f32, f32),
+    /// lo último que se pintó (dibujo, colores, escala): si no cambia, no se
+    /// vuelve a pintar
+    pintado: Option<(arte::Grid, [u32; arte::COLORES], i32)>,
+}
+
+/// Dónde queda el cuerpo de un animalito parado, dentro de su lienzo.
+fn cuerpo(e: &'static arte::Especie, celda: f32) -> (f32, f32, f32) {
+    let look = arte::Look {
+        pose: arte::Pose::Parado,
+        derecha: true,
+        parpadeo: false,
+        corazon: None,
+        zzz: None,
+        notas: None,
+        forma: arte::Forma::Normal,
+    };
+    let (x0, y0, x1, y1) =
+        arte::caja(&arte::grid(e, &look)).unwrap_or((0, 0, arte::ANCHO - 1, arte::ALTO - 1));
+    (
+        x0 as f32 * celda,
+        (x1 + 1) as f32 * celda - 1.0,
+        (y1 - y0 + 1) as f32 * celda,
+    )
 }
 
 struct App {
@@ -434,6 +485,19 @@ struct App {
     output: OutputState,
     compositor: CompositorState,
     layer_shell: LayerShell,
+    seat: SeatState,
+    pointer: Option<wl_pointer::WlPointer>,
+    arrastre: Option<mouse::Arrastre>,
+    dialogo: Option<dialogo::Dialogo>,
+    teclado: Option<wl_keyboard::WlKeyboard>,
+    /// SUPER apretado (solo se sabe mientras un animalito tiene el teclado,
+    /// o sea, mientras lo agarras)
+    super_apretado: bool,
+    /// le quitamos el teclado al soltarlo; en tanto tiempo puede volver a
+    /// tomarlo
+    foco_vuelve: Option<f32>,
+    /// el hilo que ve las letras de las terminales
+    texto: texto::Compartido,
     shm: Shm,
     qh: QueueHandle<App>,
     cfg: Config,
@@ -451,6 +515,14 @@ struct App {
     musica: Arc<AtomicBool>,
     ultimo: Instant,
     cada_mundo: f32,
+    /// lo que no urge (los colores, si es de noche)
+    cada_resto: f32,
+    /// dónde están las ventanas de veras (`mundo` se va acercando a esto)
+    reales: Vec<hypr::Ventana>,
+    /// las que vienen deslizándose a su lugar
+    deslizando: std::collections::HashSet<String>,
+    /// segundos que quedan de ir rápido porque se movió una ventana
+    se_movio: f32,
     cada_cursor: f32,
     exit: bool,
 }
@@ -479,6 +551,7 @@ impl App {
                 continue;
             };
             let surface = self.compositor.create_surface(&self.qh);
+            // vacía hasta que se pinte: luego es nomás su cuerpo
             if let Ok(region) = Region::new(&self.compositor) {
                 surface.set_input_region(Some(region.wl_region()));
             }
@@ -491,7 +564,8 @@ impl App {
             );
             layer.set_anchor(Anchor::TOP | Anchor::LEFT);
             layer.set_exclusive_zone(-1);
-            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            // al darle clic toma el teclado: así se sabe si traes SUPER apretado
+            layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
             layer.set_size(arte::ANCHO as u32 * px, arte::ALTO as u32 * px);
             layer.commit();
             let semilla = self
@@ -515,6 +589,9 @@ impl App {
                 bicho: b,
                 colores: colores(especie),
                 margen: (i32::MIN, i32::MIN),
+                region: None,
+                cuerpo: cuerpo(especie, px as f32),
+                pintado: None,
             });
         }
     }
@@ -529,10 +606,18 @@ impl App {
             return;
         }
         self.cada_mundo -= dt;
+        self.cada_resto -= dt;
         let mut noche = None;
-        if self.cada_mundo <= 0.0 {
+        // pegados a una ventana: en cada cuadro, para que se vayan con ella
+        let pegados = self.mascotas.iter().any(|p| p.bicho.pegado());
+        if self.cada_mundo <= 0.0 || pegados {
             self.cada_mundo = 0.4;
-            self.mundo = hypr::mundo(&monitor, self.borde);
+            self.pon_mundo(hypr::mundo(&monitor, self.borde));
+        }
+        self.suaviza(dt);
+        self.se_movio = (self.se_movio - dt).max(0.0);
+        if self.cada_resto <= 0.0 {
+            self.cada_resto = 0.4;
             noche = Some(es_de_noche());
             let m = mtime(&colores_path());
             if m != self.colores_mtime {
@@ -549,6 +634,8 @@ impl App {
         }
         let musica = self.cfg.baila && self.musica.load(Ordering::Relaxed);
         let (w, h) = self.pantalla;
+        self.letras();
+        self.tick_teclado(dt);
         let mut looks = Vec::with_capacity(self.mascotas.len());
         for p in &mut self.mascotas {
             p.bicho.musica = musica;
@@ -576,13 +663,55 @@ impl App {
             let g = arte::grid(self.mascotas[i].especie, look);
             self.pinta(i, &g);
         }
+        self.tick_dialogo(dt);
     }
 
     fn pinta(&mut self, i: usize, g: &arte::Grid) {
         let px = (self.cfg.escala as i32 * self.escala_buffer) as usize;
         let (w, h) = ((arte::ANCHO * px) as i32, (arte::ALTO * px) as i32);
         let shm = &self.shm;
+        let celda = self.cfg.escala as i32;
         let p = &mut self.mascotas[i];
+        // su ventana está en otro escritorio: nada (ni agarra clics)
+        let vacio = [[0; arte::ANCHO]; arte::ALTO];
+        let g = if p.bicho.oculto { &vacio } else { g };
+        // solo el cuerpo agarra clics (no el corazón ni los zzz)
+        let caja = arte::caja(g).map(|(x0, y0, x1, y1)| {
+            (
+                x0 as i32 * celda,
+                y0 as i32 * celda,
+                (x1 - x0 + 1) as i32 * celda,
+                (y1 - y0 + 1) as i32 * celda,
+            )
+        });
+        if caja != p.region {
+            if let Ok(region) = Region::new(&self.compositor) {
+                if let Some((x, y, w, h)) = caja {
+                    region.add(x, y, w, h);
+                }
+                p.layer
+                    .wl_surface()
+                    .set_input_region(Some(region.wl_region()));
+            }
+            p.region = caja;
+        }
+        let margen = (
+            (p.bicho.y - p.bicho.dy).round() as i32,
+            p.bicho.x.round() as i32,
+        );
+        // el mismo dibujo de antes: nomás se mueve la capa (si se movió)
+        let igual = p
+            .pintado
+            .as_ref()
+            .is_some_and(|(gg, c, e)| gg == g && c == &p.colores && *e == self.escala_buffer);
+        if igual && p.pool.is_some() {
+            if margen != p.margen {
+                p.layer.set_margin(margen.0, 0, 0, margen.1);
+                p.margen = margen;
+                p.layer.commit();
+            }
+            return;
+        }
         let mut pool = match p.pool.take() {
             Some(pool) => pool,
             None => match SlotPool::new((w * h * 4) as usize, shm) {
@@ -592,10 +721,7 @@ impl App {
         };
         if let Ok((buffer, canvas)) = pool.create_buffer(w, h, w * 4, wl_shm::Format::Argb8888) {
             arte::pinta(g, &p.colores, px, canvas);
-            let margen = (
-                (p.bicho.y - p.bicho.dy).round() as i32,
-                p.bicho.x.round() as i32,
-            );
+            p.pintado = Some((*g, p.colores, self.escala_buffer));
             if margen != p.margen {
                 p.layer.set_margin(margen.0, 0, 0, margen.1);
                 p.margen = margen;
@@ -642,7 +768,7 @@ fn vive(cfg: Config) -> Result<(), String> {
     handle
         .insert_source(Timer::from_duration(CUADRO), |_, _, app: &mut App| {
             app.tick();
-            TimeoutAction::ToDuration(CUADRO)
+            TimeoutAction::ToDuration(if app.rapido() { CUADRO_RAPIDO } else { CUADRO })
         })
         .map_err(|e| e.to_string())?;
     let musica = Arc::new(AtomicBool::new(false));
@@ -657,6 +783,14 @@ fn vive(cfg: Config) -> Result<(), String> {
             .map_err(|_| "el compositor no tiene wl_compositor")?,
         layer_shell: LayerShell::bind(&globals, &qh)
             .map_err(|_| "el compositor no tiene layer-shell")?,
+        seat: SeatState::new(&globals, &qh),
+        pointer: None,
+        arrastre: None,
+        dialogo: None,
+        teclado: None,
+        super_apretado: false,
+        foco_vuelve: None,
+        texto: texto::arranca(),
         shm: Shm::bind(&globals, &qh).map_err(|_| "el compositor no tiene wl_shm")?,
         qh,
         cfg,
@@ -675,6 +809,10 @@ fn vive(cfg: Config) -> Result<(), String> {
         musica,
         ultimo: Instant::now(),
         cada_mundo: 0.0,
+        cada_resto: 0.0,
+        reales: Vec::new(),
+        deslizando: Default::default(),
+        se_movio: 0.0,
         cada_cursor: 0.0,
         exit: false,
     };
@@ -753,18 +891,25 @@ impl OutputHandler for App {
 }
 
 impl LayerShellHandler for App {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        self.exit = true;
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        if self.dialogo.as_ref().is_some_and(|d| &d.layer == layer) {
+            self.cierra_dialogo();
+        } else {
+            self.exit = true;
+        }
     }
     fn configure(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &LayerSurface,
+        layer: &LayerSurface,
         _: LayerSurfaceConfigure,
         _: u32,
     ) {
-        self.configurado = true;
+        match self.dialogo.as_mut() {
+            Some(d) if &d.layer == layer => d.configurado = true,
+            _ => self.configurado = true,
+        }
     }
 }
 
@@ -780,7 +925,7 @@ impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 smithay_client_toolkit::delegate_dispatch2!(App);

@@ -8,6 +8,7 @@
 
 use crate::arte::{Forma, Look, Pose};
 use crate::hypr::{Mundo, Ventana};
+use crate::texto::Repisa;
 
 /// Por dónde puede caminar: el piso (`ventana: None`) o el techo de una
 /// ventana. `x0..x1` son las x válidas del lienzo; `y` donde queda parado.
@@ -39,6 +40,8 @@ enum Hace {
     Baila,
     /// va hacia el cursor
     Persigue,
+    /// lo tienes agarrado con el mouse
+    Agarrado,
 }
 
 pub struct Bicho {
@@ -56,6 +59,9 @@ pub struct Bicho {
     prox_parpadeo: f32,
     corazon: f32,
     cariño_espera: f32,
+    /// dónde estaba el cursor y cuánto lleva quieto cerca
+    cursor_antes: Option<(f32, f32)>,
+    cursor_quieto: f32,
     rng: u64,
     /// tamaño de una celda del dibujo
     s: f32,
@@ -78,10 +84,33 @@ pub struct Bicho {
     cursor: Option<(f32, f32)>,
     /// cuánto sube el dibujo sin moverse de lugar (bailando)
     pub dy: f32,
+    /// platicando contigo (el globo de claudio): se queda quieto
+    pub platica: bool,
+    /// metido en una ventana (su address): ahí vive, se mueve con ella y se
+    /// esconde si la ventana no se ve
+    pub dentro: Option<String>,
+    /// su ventana está en otro escritorio: no se pinta
+    pub oculto: bool,
+    /// si su ventana es una terminal: las letras donde cabe parado
+    pub repisas: Vec<Repisa>,
+    /// la ventana de la que anda colgado y su x (para irse con ella)
+    ancla: Option<(String, f32)>,
 }
 
 const CORAZON_DURA: f32 = 1.3;
+/// cuánto tiene que estar el cursor quieto cerca para que brinque de cariño
+const CARIÑO_QUIETO: f32 = 0.7;
 const GRAVEDAD: f32 = 1400.0;
+/// cada que decide qué hacer: chance de meterse a una ventana solito
+const METERSE: f32 = 0.1;
+/// y de salirse si ya anda adentro
+const SALIRSE: f32 = 0.06;
+/// en una terminal: chance de brincar a otra línea de letras
+const BRINCA_LETRAS: f32 = 0.35;
+/// cayendo más rápido que esto rebota en vez de quedarse
+const REBOTA: f32 = 900.0;
+/// lo más rápido que se puede aventar
+const AVIENTA_MAX: f32 = 2600.0;
 
 impl Bicho {
     pub fn new(s: f32, cw: f32, ch: f32, semilla: u64) -> Bicho {
@@ -99,6 +128,8 @@ impl Bicho {
             prox_parpadeo: 3.0,
             corazon: 0.0,
             cariño_espera: 0.0,
+            cursor_antes: None,
+            cursor_quieto: 0.0,
             rng: semilla | 1,
             s,
             cw,
@@ -113,6 +144,11 @@ impl Bicho {
             noche: false,
             cursor: None,
             dy: 0.0,
+            platica: false,
+            dentro: None,
+            oculto: false,
+            repisas: Vec::new(),
+            ancla: None,
         }
     }
 
@@ -141,6 +177,36 @@ impl Bicho {
     }
 
     fn plataformas(&self, m: &Mundo, ancho: f32, alto: f32) -> Vec<Plataforma> {
+        // metido en una ventana: su piso es el fondo de la ventana, y nada más
+        if let Some(v) = self
+            .dentro
+            .as_ref()
+            .and_then(|id| m.ventanas.iter().find(|v| &v.id == id))
+        {
+            let x0 = (v.x).max(0.0);
+            let x1 = (v.x + v.w - self.cw).min(ancho - self.cw).max(x0);
+            let mut p = vec![Plataforma {
+                ventana: None,
+                x0,
+                x1,
+                y: v.y + v.h - self.ch,
+            }];
+            // las letras de la terminal (cada línea se llama por su altura:
+            // si el texto se recorre, se le va el piso y cae)
+            for r in &self.repisas {
+                let (rx0, rx1) = ((v.x + r.x0).max(x0), (v.x + r.x1).min(x1));
+                let y = v.y + r.y;
+                if rx0 <= rx1 && y > v.y - self.ch && y < v.y + v.h - self.ch - 2.0 {
+                    p.push(Plataforma {
+                        ventana: Some(format!("{}#{}", v.id, r.y.round() as i32)),
+                        x0: rx0,
+                        x1: rx1,
+                        y,
+                    });
+                }
+            }
+            return p;
+        }
         let mut p = vec![Plataforma {
             ventana: None,
             x0: 0.0,
@@ -184,7 +250,7 @@ impl Bicho {
     fn decide(&mut self, m: &Mundo, ancho: f32, alto: f32) {
         let r = self.azar();
         let piso = alto - m.abajo - self.ch;
-        if self.trepa && self.sobre.is_none() && r < 0.22 {
+        if self.trepa && self.dentro.is_none() && self.sobre.is_none() && r < 0.22 {
             // una ventana que llegue al piso y con lado libre en la pantalla
             let mut opciones = Vec::new();
             for v in &m.ventanas {
@@ -208,6 +274,55 @@ impl Bicho {
                 self.falta = 30.0;
                 return;
             }
+        }
+        // a veces se mete a una ventana solito: si anda arriba de ella se
+        // clava para adentro; si anda en el piso, a la que le quede enfrente
+        if self.dentro.is_none() && self.azar() < METERSE {
+            let enfrente = || {
+                let centro = self.x + self.cw / 2.0;
+                m.ventanas
+                    .iter()
+                    .find(|v| {
+                        centro > v.x
+                            && centro < v.x + v.w
+                            && (v.y + v.h - (piso + self.ch)).abs() < 40.0
+                            && v.h > self.ch
+                    })
+                    .map(|v| v.id.clone())
+            };
+            if let Some(id) = self.sobre.clone().or_else(enfrente) {
+                self.dentro = Some(id);
+                self.sobre = None;
+                self.brinquito();
+                return;
+            }
+        }
+        // en una terminal: brinca a otra línea de letras que le quede cerca
+        if self.dentro.is_some() && self.azar() < BRINCA_LETRAS {
+            let plats = self.plataformas(m, ancho, alto);
+            let cerca: Vec<&Plataforma> = plats
+                .iter()
+                .filter(|p| {
+                    p.ventana != self.sobre
+                        && (p.y - self.y).abs() <= 170.0
+                        && (p.y - self.y).abs() > 4.0
+                })
+                .filter(|p| (self.x.clamp(p.x0, p.x1) - self.x).abs() <= 280.0)
+                .collect();
+            if !cerca.is_empty() {
+                let p = cerca[(self.azar() * cerca.len() as f32) as usize % cerca.len()];
+                // que caiga tantito adentro de la repisa, no en la orilla
+                let adentro = ((p.x1 - p.x0) * 0.15).min(20.0);
+                let tx = (self.x + self.entre(-60.0, 60.0)).clamp(p.x0 + adentro, p.x1 - adentro);
+                self.salta_a(tx, p.y);
+                return;
+            }
+        }
+        // adentro: de vez en cuando se sale por abajo
+        if self.dentro.is_some() && self.azar() < SALIRSE {
+            self.dentro = None;
+            self.brinquito();
+            return;
         }
         if self.musica && self.azar() < 0.6 {
             (self.hace, self.falta) = (Hace::Baila, self.entre(4.0, 10.0));
@@ -268,25 +383,63 @@ impl Bicho {
         }
         self.cursor = cursor;
         self.dy = 0.0;
+        // metido en una ventana que no se ve: o está en otro escritorio (se
+        // esconde con ella) o ya la cerraron (se sale y cae)
+        if let Some(id) = self.dentro.clone() {
+            self.oculto = !m.ventanas.iter().any(|v| v.id == id);
+            if self.oculto {
+                if m.todas.is_empty() || m.todas.contains(&id) {
+                    return self.look();
+                }
+                self.dentro = None;
+                self.oculto = false;
+                self.cae();
+            }
+        }
+        // la ventana donde anda (adentro o encima) se movió: él también
+        let suya = self.dentro.clone().or_else(|| {
+            self.sobre
+                .as_ref()
+                .map(|s| s.split('#').next().unwrap_or(s).to_string())
+        });
+        let donde = suya.and_then(|id| m.ventanas.iter().find(|v| v.id == id).map(|v| (id, v.x)));
+        if let (Some((id, x)), Some((ida, xa))) = (&donde, &self.ancla)
+            && id == ida
+            && !matches!(self.hace, Hace::Agarrado)
+        {
+            self.x += x - xa;
+        }
+        self.ancla = donde;
         let plats = self.plataformas(m, ancho, alto);
         let paso = self.paso();
 
         // ¿lo que pisa sigue ahí? (la ventana se cerró, se movió o cambiaste
         // de escritorio)
-        if !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. }) {
+        if !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. } | Hace::Agarrado) {
             match plats.iter().find(|p| p.ventana == self.sobre) {
                 Some(p) if self.x >= p.x0 - 2.0 && self.x <= p.x1 + 2.0 => self.y = p.y,
                 _ => self.cae(),
             }
         }
 
-        // cariño: el cursor cerca lo despierta y brinca
+        // cariño: el cursor quieto cerca lo despierta y brinca (si nomás va
+        // pasando, o vienes a agarrarlo, no: que no se te escape)
         if let Some((cx, cy)) = cursor {
             let (bx, by) = (self.x + self.cw / 2.0, self.y + self.ch * 0.65);
             let cerca = (cx - bx).hypot(cy - by) < self.cw * 1.4;
-            if cerca
+            let quieto = self
+                .cursor_antes
+                .is_some_and(|(ax, ay)| (cx - ax).hypot(cy - ay) < 6.0);
+            self.cursor_quieto = if cerca && quieto {
+                self.cursor_quieto + dt
+            } else {
+                0.0
+            };
+            self.cursor_antes = Some((cx, cy));
+            if self.cursor_quieto > CARIÑO_QUIETO
+                && !self.platica
                 && self.cariño_espera <= 0.0
-                && !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. })
+                && !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. } | Hace::Agarrado)
             {
                 self.cariño(cx > bx);
                 if self.hace == Hace::Persigue {
@@ -296,6 +449,8 @@ impl Bicho {
         }
 
         match self.hace.clone() {
+            // lo mueve el mouse (arrastra); aquí nomás espera
+            Hace::Agarrado => {}
             Hace::Camina => {
                 self.anda(dt, &plats);
                 if self.falta <= 0.0 && self.hace == Hace::Camina {
@@ -324,6 +479,7 @@ impl Bicho {
                     self.decide(m, ancho, alto);
                 }
             }
+            Hace::Para | Hace::Sienta if self.platica => {}
             Hace::Para | Hace::Sienta => {
                 if self.falta <= 0.0 || (self.musica && self.azar() < dt * 0.3) {
                     self.decide(m, ancho, alto);
@@ -381,7 +537,22 @@ impl Bicho {
                 let antes = self.y;
                 self.vy += GRAVEDAD * dt;
                 self.y += self.vy * dt;
-                self.x = (self.x + self.vx * dt).clamp(0.0, (ancho - self.cw).max(0.0));
+                // las orillas de la pantalla: rebota (si lo aventaste)
+                let tope_x = (ancho - self.cw).max(0.0);
+                self.x += self.vx * dt;
+                if self.dentro.is_some() {
+                    // adentro no se sale por los lados
+                    self.x = self.x.clamp(plats[0].x0, plats[0].x1);
+                }
+                if self.x < 0.0 || self.x > tope_x {
+                    self.x = self.x.clamp(0.0, tope_x);
+                    self.vx = -self.vx * 0.5;
+                    self.der = self.vx > 0.0;
+                }
+                if self.y < -self.ch * 0.3 && self.vy < 0.0 {
+                    self.y = -self.ch * 0.3;
+                    self.vy = -self.vy * 0.3;
+                }
                 if self.vy > 0.0 {
                     // cae en lo más alto que cruzó
                     let aterriza = plats
@@ -392,7 +563,15 @@ impl Bicho {
                         .min_by(|a, b| a.y.total_cmp(&b.y));
                     let piso = &plats[0];
                     let aterriza = aterriza.or((self.y >= piso.y).then_some(piso));
-                    if let Some(p) = aterriza {
+                    if let Some(p) = aterriza
+                        && self.vy > REBOTA
+                    {
+                        // cayó fuerte (lo aventaste): rebota y sigue volando
+                        self.y = p.y;
+                        self.aterrizo = 0.0;
+                        self.vy = -self.vy * 0.35;
+                        self.vx *= 0.6;
+                    } else if let Some(p) = aterriza {
                         self.y = p.y;
                         self.sobre = p.ventana.clone();
                         // qué tan fuerte cayó: más alto, más se embarra
@@ -471,13 +650,110 @@ impl Bicho {
         self.hace = Hace::Vuela;
     }
 
+    /// Lo agarras con el mouse: se queda colgando donde lo tengas.
+    pub fn agarra(&mut self) {
+        self.dentro = None;
+        self.oculto = false;
+        self.hace = Hace::Agarrado;
+        self.sobre = None;
+        self.vuelve = None;
+        self.vx = 0.0;
+        self.vy = 0.0;
+    }
+
+    /// Un brinco que cae en (tx, ty): sube un poco más alto que eso y cae
+    /// justo ahí.
+    fn salta_a(&mut self, tx: f32, ty: f32) {
+        let sube = (self.y - ty).max(0.0) + 24.0;
+        let vy = -(2.0 * GRAVEDAD * sube).sqrt();
+        let cae = ty - (self.y - sube);
+        let t = -vy / GRAVEDAD + (2.0 * cae.max(1.0) / GRAVEDAD).sqrt();
+        self.vy = vy;
+        self.vx = (tx - self.x) / t;
+        if self.vx.abs() > 1.0 {
+            self.der = self.vx > 0.0;
+        }
+        self.sobre = None;
+        self.vuelve = None;
+        (self.hace, self.falta) = (Hace::Vuela, 0.0);
+    }
+
+    fn brinquito(&mut self) {
+        self.vy = -260.0;
+        self.vx = 0.0;
+        self.vuelve = None;
+        (self.hace, self.falta) = (Hace::Vuela, 0.0);
+    }
+
+    /// ¿Va en el aire o agarrado? (se tiene que ver fluido)
+    pub fn en_el_aire(&self) -> bool {
+        matches!(self.hace, Hace::Vuela | Hace::Agarrado)
+    }
+
+    /// ¿Anda en una ventana (adentro o encima)? Entonces hay que ver las
+    /// ventanas seguido, para irse con ella si la mueves.
+    pub fn pegado(&self) -> bool {
+        self.dentro.is_some() || self.sobre.is_some() || matches!(self.hace, Hace::Trepa { .. })
+    }
+
+    /// Lo dejaste encima de una ventana: se mete y ahí se queda (cae hasta
+    /// el fondo de la ventana).
+    pub fn entra(&mut self, ventana: String) {
+        self.dentro = Some(ventana);
+        self.corazon = CORAZON_DURA;
+    }
+
+    /// Arrastrándolo: su esquina de arriba a la izquierda va a (x, y). Mira
+    /// hacia donde lo jalas.
+    pub fn arrastra(&mut self, x: f32, y: f32) {
+        if (x - self.x).abs() > 1.0 {
+            self.der = x > self.x;
+        }
+        self.x = x;
+        self.y = y;
+    }
+
+    /// Lo sueltas con esa velocidad (pixeles por segundo): sale volando.
+    pub fn avienta(&mut self, vx: f32, vy: f32) {
+        let v = vx.hypot(vy);
+        let k = if v > AVIENTA_MAX {
+            AVIENTA_MAX / v
+        } else {
+            1.0
+        };
+        self.vx = vx * k;
+        self.vy = vy * k;
+        if self.vx.abs() > 30.0 {
+            self.der = self.vx > 0.0;
+        }
+        self.sobre = None;
+        self.vuelve = None;
+        self.hace = Hace::Vuela;
+        self.cariño_espera = 2.0;
+    }
+
+    /// Se pone a platicar: suelta un corazón y se queda quieto (si va en el
+    /// aire, al caer) hasta que `platica` vuelva a ser false.
+    pub fn platica(&mut self, der: bool) {
+        self.platica = true;
+        self.der = der;
+        self.corazon = CORAZON_DURA;
+        self.falta = 1.0;
+        if self.hace == Hace::Vuela {
+            self.vuelve = Some(Hace::Para);
+        } else if self.hace != Hace::Agarrado {
+            self.hace = Hace::Para;
+        }
+    }
+
     /// Para saludarse con otro: anda suelto y no acaba de saludar.
     pub fn saludable(&self) -> Option<(f32, Option<&str>)> {
         let libre = matches!(
             self.hace,
             Hace::Camina | Hace::Para | Hace::Persigue | Hace::Sienta | Hace::Baila
         );
-        (libre && self.cariño_espera <= 0.0).then_some((self.x, self.sobre.as_deref()))
+        (libre && !self.platica && self.cariño_espera <= 0.0)
+            .then_some((self.x, self.sobre.as_deref()))
     }
 
     fn cae(&mut self) {
@@ -496,6 +772,10 @@ impl Bicho {
             return Forma::Normal;
         }
         match &self.hace {
+            // colgando de tu mouse: estirada
+            Hace::Agarrado => Forma::Estirada,
+            // rebotó en el piso: se embarra un instante
+            Hace::Vuela if self.aterrizo < 0.06 => Forma::Plasta,
             Hace::Vuela => match self.vy.abs() {
                 v if v > 160.0 => Forma::Estirada,
                 v if v > 70.0 => Forma::Alta,
@@ -560,7 +840,7 @@ impl Bicho {
                 paso: (self.reloj / 0.2) as u32 % 2 == 1,
                 pared_der: *pared_der,
             },
-            Hace::Vuela => Pose::Brinca,
+            Hace::Vuela | Hace::Agarrado => Pose::Brinca,
         };
         Look {
             pose,
@@ -584,6 +864,8 @@ mod tests {
             abajo: 0.0,
             borde: 1.0,
             origen: (0.0, 0.0),
+            todas: vec![],
+            clis: vec![],
         }
     }
 
@@ -660,6 +942,191 @@ mod tests {
         }
         assert!((b.x - 900.0).abs() > 20.0, "no se movió");
         assert!(aire > 10, "no brincó");
+    }
+
+    #[test]
+    fn agarrado_no_se_cae_y_aventado_vuela_rebota_y_cae() {
+        let mut b = Bicho::new(3.0, 48.0, 60.0, 9);
+        b.salta = true;
+        b.x = 900.0;
+        b.y = 1140.0;
+        b.hace = Hace::Camina;
+        b.falta = 5.0;
+        let m = mundo(vec![]);
+        b.agarra();
+        b.arrastra(500.0, 300.0);
+        for _ in 0..30 {
+            let look = b.tick(0.033, &m, 1920.0, 1200.0, None);
+            assert_eq!(look.forma, Forma::Estirada);
+        }
+        assert_eq!((b.x, b.y), (500.0, 300.0), "agarrado no se mueve solo");
+        // aventón fuerte a la izquierda y para abajo: pega en la orilla y rebota
+        b.avienta(-9000.0, 1500.0);
+        let mut reboto_piso = false;
+        let mut minx = f32::MAX;
+        for _ in 0..300 {
+            b.tick(0.016, &m, 1920.0, 1200.0, None);
+            minx = minx.min(b.x);
+            reboto_piso |= b.hace == Hace::Vuela && b.vy < 0.0 && b.y > 1000.0;
+        }
+        assert!(minx >= 0.0, "se salió de la pantalla");
+        assert!(reboto_piso, "no rebotó en el piso");
+        assert_ne!(b.hace, Hace::Vuela, "nunca aterrizó");
+        assert_eq!(b.y, 1140.0);
+    }
+
+    #[test]
+    fn metido_en_una_ventana_vive_ahi_se_esconde_y_si_la_cierran_cae() {
+        let v = |x: f32| Ventana {
+            id: "a".into(),
+            x,
+            y: 200.0,
+            w: 400.0,
+            h: 300.0,
+        };
+        let mut m = mundo(vec![v(300.0)]);
+        m.todas = vec!["a".into()];
+        let mut b = Bicho::new(3.0, 48.0, 60.0, 21);
+        b.salta = true;
+        b.x = 400.0;
+        b.y = 250.0;
+        b.agarra();
+        b.avienta(0.0, 0.0);
+        b.entra("a".into());
+        // (solito se sale de vez en cuando: aquí lo volvemos a meter)
+        for _ in 0..2000 {
+            b.dentro = Some("a".into());
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+            if b.dentro.is_some() {
+                assert!(
+                    b.x >= 300.0 && b.x <= 300.0 + 400.0 - 48.0,
+                    "se salió por un lado: {}",
+                    b.x
+                );
+                assert!(
+                    b.y <= 200.0 + 300.0 - 60.0 + 0.5,
+                    "se salió por abajo: {}",
+                    b.y
+                );
+            }
+        }
+        // mueves la ventana: se va con ella
+        m.ventanas = vec![v(900.0)];
+        for _ in 0..60 {
+            b.dentro = Some("a".into());
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        b.dentro = Some("a".into());
+        assert!(b.x >= 900.0, "no se fue con la ventana: {}", b.x);
+        // otro escritorio: se esconde, sin moverse
+        m.ventanas.clear();
+        let antes = (b.x, b.y);
+        for _ in 0..60 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        assert!(b.oculto);
+        assert_eq!((b.x, b.y), antes);
+        // la cierran: sale y cae al piso
+        m.todas.clear();
+        m.todas.push("otra".into());
+        for _ in 0..200 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        assert!(!b.oculto && b.dentro.is_none());
+        assert_eq!(b.y, 1200.0 - 60.0);
+    }
+
+    #[test]
+    fn solitos_se_meten_a_las_ventanas_y_se_salen() {
+        let m = {
+            let mut m = mundo(vec![Ventana {
+                id: "a".into(),
+                x: 0.0,
+                y: 600.0,
+                w: 1920.0,
+                h: 600.0,
+            }]);
+            m.todas = vec!["a".into()];
+            m
+        };
+        let mut entro = false;
+        let mut salio = false;
+        for semilla in 1..6 {
+            let mut b = Bicho::new(3.0, 48.0, 60.0, semilla);
+            b.trepa = false;
+            b.aparece(1920.0);
+            for _ in 0..20000 {
+                b.tick(0.033, &m, 1920.0, 1200.0, None);
+                if b.dentro.is_some() {
+                    entro = true;
+                } else if entro {
+                    salio = true;
+                }
+            }
+        }
+        assert!(entro, "nunca se metió");
+        assert!(salio, "nunca se salió");
+    }
+
+    #[test]
+    fn si_mueves_su_ventana_se_va_con_ella() {
+        let v = |x: f32| Ventana {
+            id: "a".into(),
+            x,
+            y: 200.0,
+            w: 400.0,
+            h: 300.0,
+        };
+        let mut m = mundo(vec![v(300.0)]);
+        m.todas = vec!["a".into()];
+        let mut b = Bicho::new(3.0, 48.0, 60.0, 4);
+        b.x = 450.0;
+        b.y = 440.0;
+        b.entra("a".into());
+        b.hace = Hace::Duerme;
+        b.falta = 100.0;
+        for _ in 0..10 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        let antes = b.x - 300.0;
+        // la arrastras de a poquito, como con el mouse
+        for k in 1..=60 {
+            m.ventanas = vec![v(300.0 + k as f32 * 10.0)];
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+            assert_eq!(b.dentro.as_deref(), Some("a"));
+        }
+        assert!(
+            (b.x - 900.0 - antes).abs() < 1.0,
+            "se quedó atrás: {} vs {}",
+            b.x - 900.0,
+            antes
+        );
+        assert_eq!(b.hace, Hace::Duerme, "ni se despertó");
+    }
+
+    #[test]
+    fn si_vas_a_agarrarlo_no_brinca_pero_si_lo_acaricias_si() {
+        let m = mundo(vec![]);
+        let nuevo = || {
+            let mut b = Bicho::new(3.0, 48.0, 60.0, 8);
+            (b.x, b.y, b.hace, b.falta) = (900.0, 1140.0, Hace::Sienta, 100.0);
+            b
+        };
+        // el cursor llega directo hasta él: no brinca
+        let mut b = nuevo();
+        for k in 0..20 {
+            let c = (500.0 + k as f32 * 22.0, 1170.0);
+            b.tick(0.033, &m, 1920.0, 1200.0, Some(c));
+            assert_ne!(b.hace, Hace::Vuela, "brincó cuando ibas a agarrarlo");
+        }
+        // se queda quieto cerca un ratito: brinca con su corazón
+        let mut b = nuevo();
+        let mut brinco = false;
+        for _ in 0..40 {
+            b.tick(0.033, &m, 1920.0, 1200.0, Some((930.0, 1170.0)));
+            brinco |= b.hace == Hace::Vuela;
+        }
+        assert!(brinco, "no le dio cariño");
     }
 
     #[test]

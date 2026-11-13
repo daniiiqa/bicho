@@ -34,7 +34,9 @@ pub struct Especie {
     pub brinca: bool,
     /// las formas de algo blandito (squash & stretch); None: no se deforma
     blanda: Option<&'static Blanda>,
-    /// de qué color del look es
+    /// con un clic te pregunta si ocupas ayuda y abre a Claude (claudio)
+    pub invoca: bool,
+    /// de qué color del look es (o un "#rrggbb" fijo)
     pub color: &'static [&'static str],
 }
 
@@ -152,6 +154,7 @@ pub const BICHO: Especie = Especie {
     patas_b: &["....l.l...l.l...", "....l.l...l.l..."],
     brinca: false,
     blanda: None,
+    invoca: false,
     color: &["acc", "color12"],
 };
 
@@ -185,6 +188,7 @@ pub const MICHI: Especie = Especie {
     patas_b: &["...l.l....l.l...", "...l.l....l.l..."],
     brinca: false,
     blanda: None,
+    invoca: false,
     color: &["color4", "color13", "color12"],
 };
 
@@ -207,13 +211,155 @@ pub const BABA: Especie = Especie {
     patas_b: &[],
     brinca: true,
     blanda: Some(&BABA_BLANDA),
+    invoca: false,
     color: &["color10", "color2", "color11"],
 };
 
-pub const TODAS: [&Especie; 3] = [&BICHO, &MICHI, &BABA];
+/// claudio: el bichito de Claude, que lo hizo para acordarse de cuando
+/// hicieron el bicho juntos. Cuadradito y terracota (color fijo, no cambia
+/// con el look), sin contorno, con bracitos, cachetes y un foquito de
+/// antena que se mece al caminar.
+pub const CLAUDIO: Especie = Especie {
+    nombre: "claudio",
+    cuerpo: &[
+        "........hh......",
+        ".......hhhh.....",
+        "........hh......",
+        "........b.......",
+        "...bbbbbbbbbb...",
+        "..bbbbbbbbbbbb..",
+        ".bbhhbbbbbbbbbb.",
+        "bbbhbbwpbbwpbbbb",
+        "bbbbbbwpbbwpbbbb",
+        "bbbnnbbbbbbnnbbb",
+        ".bbbbbbbbbbbbbb.",
+        "..bbbbbbbbbbbb..",
+    ],
+    cuerpo_b: Some(&[
+        ".........hh.....",
+        "........hhhh....",
+        ".........hh.....",
+        "........b.......",
+        "...bbbbbbbbbb...",
+        "..bbbbbbbbbbbb..",
+        ".bbhhbbbbbbbbbb.",
+        "bbbhbbwpbbwpbbbb",
+        "bbbbbbwpbbwpbbbb",
+        "bbbnnbbbbbbnnbbb",
+        ".bbbbbbbbbbbbbb.",
+        "..bbbbbbbbbbbb..",
+    ]),
+    patas_a: &["....bb....bb....", "....bb....bb...."],
+    patas_b: &["....bb....bb....", "..........bb...."],
+    brinca: false,
+    blanda: None,
+    invoca: true,
+    color: &["#d97757"],
+};
+
+pub const TODAS: [&Especie; 4] = [&BICHO, &MICHI, &BABA, &CLAUDIO];
 
 pub fn especie(nombre: &str) -> Option<&'static Especie> {
-    TODAS.into_iter().find(|e| e.nombre == nombre)
+    todas().iter().copied().find(|e| e.nombre == nombre)
+}
+
+/// Todas, ya con sus disfraces: si existe `~/.config/bicho/<especie>.txt`,
+/// ese dibujo reemplaza al de la especie (nomás en tu máquina; el repo no se
+/// entera). Lo blandito de la baba no se disfraza.
+pub fn todas() -> &'static [&'static Especie] {
+    static D: std::sync::OnceLock<Vec<&'static Especie>> = std::sync::OnceLock::new();
+    D.get_or_init(|| {
+        let dir =
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config/bicho"));
+        TODAS
+            .iter()
+            .map(|&e| {
+                let texto = dir.as_ref().and_then(|d| {
+                    std::fs::read_to_string(d.join(format!("{}.txt", e.nombre))).ok()
+                });
+                match texto.and_then(|t| disfraz(e, &t)) {
+                    Some(d) => &*Box::leak(Box::new(d)),
+                    None => e,
+                }
+            })
+            .collect()
+    })
+}
+
+/// Lee un disfraz:
+///
+/// ```text
+/// // comentarios así
+/// color = #d97757
+/// [cuerpo]
+/// ..bbbbbbbbbbbb..
+/// [cuerpo_b]   (opcional: el otro cuadro al caminar)
+/// [patas_a]    (opcionales)
+/// [patas_b]
+/// ```
+///
+/// Las letras son las de siempre (o contorno, b cuerpo, h brillo, w ojo,
+/// p pupila, n nariz/cachete). Renglones de 16; si algo está mal, None (y se
+/// queda el dibujo normal).
+fn disfraz(base: &Especie, texto: &str) -> Option<Especie> {
+    fn fija(v: Vec<String>) -> &'static [&'static str] {
+        let v: Vec<&'static str> = v
+            .into_iter()
+            .map(|s| &*Box::leak(s.into_boxed_str()))
+            .collect();
+        Box::leak(v.into_boxed_slice())
+    }
+    let mut secciones: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let mut color = None;
+    let mut actual = None;
+    for l in texto.lines().map(str::trim_end) {
+        let l2 = l.trim();
+        if l2.is_empty() || l2.starts_with("//") {
+            continue;
+        }
+        if let Some(c) = l2
+            .strip_prefix("color")
+            .map(str::trim)
+            .and_then(|c| c.strip_prefix('='))
+        {
+            let c = c.trim();
+            let ok =
+                c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|d| d.is_ascii_hexdigit());
+            color = ok.then(|| &*Box::leak(c.to_string().into_boxed_str()));
+            continue;
+        }
+        if let Some(s) = l2.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            actual = Some(s.to_string());
+            secciones.entry(s.to_string()).or_default();
+            continue;
+        }
+        if l.chars().count() != ANCHO || !l.chars().all(|c| ".obhwpnal".contains(c)) {
+            return None;
+        }
+        secciones.get_mut(actual.as_ref()?)?.push(l.to_string());
+    }
+    let cuerpo = secciones.remove("cuerpo").filter(|c| !c.is_empty())?;
+    let patas_a = secciones.remove("patas_a").unwrap_or_default();
+    let patas_b = secciones
+        .remove("patas_b")
+        .unwrap_or_else(|| patas_a.clone());
+    let cuerpo_b = secciones
+        .remove("cuerpo_b")
+        .filter(|c| c.len() == cuerpo.len());
+    if cuerpo.len() + patas_a.len().max(patas_b.len()) > ANCHO {
+        return None;
+    }
+    Some(Especie {
+        nombre: base.nombre,
+        cuerpo: fija(cuerpo),
+        cuerpo_b: cuerpo_b.map(fija),
+        patas_a: fija(patas_a),
+        patas_b: fija(patas_b),
+        brinca: base.brinca,
+        blanda: base.blanda,
+        invoca: base.invoca,
+        color: color.map_or(base.color, |c| Box::leak(Box::new([c])).as_slice()),
+    })
 }
 
 fn celda(c: char) -> u8 {
@@ -259,10 +405,16 @@ pub struct Look {
 }
 
 /// Cierra los ojos: con ojos de dos renglones el de arriba se vuelve cuerpo
-/// y el de abajo una rayita; con uno, rayita.
+/// y el de abajo una rayita; con uno, rayita. Los ojos sin blanco (pura
+/// pupila, como en algún disfraz) se hacen de un renglón.
 fn cierra(filas: &mut [Vec<char>]) {
+    let ojo = if filas.iter().flatten().any(|&c| c == 'w') {
+        'w'
+    } else {
+        'p'
+    };
     let con_ojo: Vec<usize> = (0..filas.len())
-        .filter(|&i| filas[i].contains(&'w'))
+        .filter(|&i| filas[i].contains(&ojo))
         .collect();
     for (k, &i) in con_ojo.iter().enumerate() {
         for c in filas[i].iter_mut() {
@@ -427,6 +579,23 @@ pub fn grid(e: &Especie, look: &Look) -> Grid {
     g
 }
 
+/// Las celdas del cuerpo (sin corazón ni zzz ni notas): (x0, y0, x1, y1),
+/// inclusivas. Para saber dónde se le puede dar clic.
+pub fn caja(g: &Grid) -> Option<(usize, usize, usize, usize)> {
+    let mut c: Option<(usize, usize, usize, usize)> = None;
+    for (y, f) in g.iter().enumerate() {
+        for (x, &v) in f.iter().enumerate() {
+            if v != 0 && v != CORAZON && v != ZZZ {
+                c = Some(match c {
+                    None => (x, y, x, y),
+                    Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                });
+            }
+        }
+    }
+    c
+}
+
 /// Pinta la cuadrícula en un buffer ARGB (premultiplicado) de
 /// `ANCHO*px × ALTO*px`.
 pub fn pinta(g: &Grid, colores: &[u32; COLORES], px: usize, buf: &mut [u8]) {
@@ -523,6 +692,65 @@ mod tests {
             let g = grid(e, &look(false));
             assert!(g.iter().any(|f| f[0] != 0), "{}", e.nombre);
         }
+    }
+
+    const ORIGINAL: &str = "// prueba: sin contorno y ojos de pura pupila
+color = #112233
+[cuerpo]
+..bbbbbbbbbbbb..
+..bbpbbbbbbpbb..
+..bbpbbbbbbpbb..
+bbbbbbbbbbbbbbbb
+..bbbbbbbbbbbb..
+[patas_a]
+...b.b....b.b...
+";
+
+    #[test]
+    fn un_disfraz_cambia_el_dibujo_y_el_color() {
+        let d = disfraz(&CLAUDIO, ORIGINAL).expect("se lee");
+        assert_eq!(d.cuerpo.len(), 5);
+        assert_eq!(d.patas_b, d.patas_a, "sin patas_b usa las mismas");
+        assert_eq!(d.color, &["#112233"]);
+        assert!(d.invoca, "sigue siendo claudio");
+        // parpadea aunque sus ojos sean pura pupila
+        let pupilas = |parpadeo| {
+            let look = Look {
+                pose: Pose::Parado,
+                derecha: true,
+                parpadeo,
+                corazon: None,
+                zzz: None,
+                notas: None,
+                forma: Forma::Normal,
+            };
+            grid(&d, &look)
+                .iter()
+                .flatten()
+                .filter(|&&c| c == PUPILA)
+                .count()
+        };
+        assert_eq!((pupilas(false), pupilas(true)), (4, 2));
+    }
+
+    #[test]
+    fn un_disfraz_mal_hecho_no_cuenta() {
+        assert!(
+            disfraz(&CLAUDIO, "[cuerpo]\n..bbb..\n").is_none(),
+            "renglón corto"
+        );
+        assert!(
+            disfraz(&CLAUDIO, "[patas_a]\n...b.b....b.b...\n").is_none(),
+            "sin cuerpo"
+        );
+        assert!(
+            disfraz(
+                &CLAUDIO,
+                &format!("[cuerpo]\n{}", "bbbbbbbbbbbbbbbb\n".repeat(17))
+            )
+            .is_none(),
+            "muy alto"
+        );
     }
 
     #[test]

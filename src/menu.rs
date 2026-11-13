@@ -22,12 +22,13 @@ fn icono(especie: &str) -> &'static str {
     match especie {
         "michi" => "\u{f011b}",
         "baba" => "\u{f058c}",
+        "claudio" => "\u{f0674}",
         _ => "\u{f00e4}",
     }
 }
 
 /// El idioma de discada (hypr/discada.conf → LANGUAGE=es|en); inglés si no.
-fn es() -> bool {
+pub fn es() -> bool {
     std::fs::read_to_string(super::home(".config/hypr/discada.conf"))
         .ok()
         .and_then(|s| {
@@ -141,6 +142,30 @@ fn relanza(lista: &[String]) {
     }
 }
 
+/// Abre a Claude (`claude`) en una terminal, en `dir` (o en tu home). La
+/// lanza Hyprland, así no queda como hija de los animalitos.
+pub fn abre_claude(dir: Option<PathBuf>) {
+    let term = std::env::var("TERMINAL")
+        .ok()
+        .filter(|t| !t.is_empty() && !t.contains(['"', '\\', '\'']))
+        .unwrap_or_else(|| "kitty".into());
+    // va dentro de un string de Lua y luego de sh: nada de comillas raras
+    let dir = dir
+        .filter(|d| !d.to_string_lossy().contains(['"', '\\', '\'', '\n']))
+        .unwrap_or_else(|| super::home(""));
+    let cmd = if term == "kitty" {
+        format!("kitty --directory '{}' -e claude", dir.display())
+    } else {
+        format!("cd '{}' && {term} -e claude", dir.display())
+    };
+    let lua = format!("hl.dsp.exec_cmd(\"{cmd}\")");
+    let _ = Command::new("hyprctl")
+        .args(["dispatch", &lua])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 pub fn menu() -> i32 {
     // como los demás menús: si ya hay uno abierto, se cierra
     let _ = Command::new("pkill").args(["-x", "jale"]).status();
@@ -236,7 +261,7 @@ fn quienes(l: &L) {
             .iter()
             .map(|p| format!("{I_MENOS}  {} {}  {p}", l.t("quitar", "remove"), icono(p)))
             .collect();
-        let nuevos: Vec<&str> = crate::arte::TODAS.iter().map(|e| e.nombre).collect();
+        let nuevos: Vec<&str> = crate::arte::todas().iter().map(|e| e.nombre).collect();
         filas.extend(
             nuevos
                 .iter()
