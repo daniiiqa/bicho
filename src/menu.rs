@@ -29,15 +29,22 @@ fn icono(especie: &str) -> &'static str {
 
 /// El idioma de discada (hypr/discada.conf → LANGUAGE=es|en); inglés si no.
 pub fn es() -> bool {
-    std::fs::read_to_string(super::home(".config/hypr/discada.conf"))
+    let discada = std::fs::read_to_string(super::home(".config/hypr/discada.conf"))
         .ok()
         .and_then(|s| {
             s.lines().find_map(|l| {
                 l.strip_prefix("LANGUAGE=")
                     .map(|v| v.split_whitespace().next().unwrap_or("").to_string())
             })
-        })
-        .is_some_and(|v| v == "es")
+        });
+    match discada {
+        Some(v) => v == "es",
+        // fuera de discada: el idioma del sistema
+        None => ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
+            .iter()
+            .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+            .is_some_and(|v| v.starts_with("es")),
+    }
 }
 
 struct L(bool);
@@ -77,7 +84,121 @@ fn guarda(v: &Value) {
 }
 
 /// jale en modo dmenu; el índice elegido (None: Esc).
+/// El menú: jale (el de discada); sin jale, el que haya (kdialog en KDE,
+/// rofi, fuzzel, wofi, zenity). El índice elegido (None: Esc).
 fn pick(prompt: &str, mesg: &str, filas: &[String], fila: usize) -> Option<usize> {
+    if !super::home(".local/bin/jale").is_file() {
+        return pick_otro(prompt, mesg, filas);
+    }
+    pick_jale(prompt, mesg, filas, fila)
+}
+
+/// ¿Está ese programa en el PATH?
+fn hay(programa: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(programa).is_file()))
+}
+
+/// Sin los iconos de Nerd Font (fuera de jale salen como cuadritos).
+fn sin_iconos(s: &str) -> String {
+    s.chars()
+        .filter(|&c| !matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..=0x10FFFF))
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Corre un menú y devuelve lo que imprimió (None: lo cerraste).
+fn corre(programa: &str, args: &[String], entrada: Option<&str>) -> Option<String> {
+    let mut cmd = Command::new(programa);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.stdin(if entrada.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
+    let mut hijo = cmd.spawn().ok()?;
+    if let (Some(texto), Some(mut e)) = (entrada, hijo.stdin.take()) {
+        let _ = e.write_all(texto.as_bytes());
+    }
+    let out = hijo.wait_with_output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn pick_otro(prompt: &str, mesg: &str, filas: &[String]) -> Option<usize> {
+    let limpias: Vec<String> = filas.iter().map(|f| sin_iconos(f)).collect();
+    let lista = limpias.join("\n");
+    let titulo = if mesg.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{prompt}: {mesg}")
+    };
+    let por_texto = |t: String| limpias.iter().position(|f| *f == t);
+    let kde = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.to_uppercase().contains("KDE"));
+    let mut orden = vec!["rofi", "fuzzel", "wofi", "kdialog", "zenity"];
+    if kde {
+        orden.retain(|m| *m != "kdialog");
+        orden.insert(0, "kdialog");
+    }
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let Some(m) = orden.into_iter().find(|m| hay(m)) else {
+        eprintln!("bicho: no hay menú (jale, rofi, fuzzel, wofi, kdialog o zenity)");
+        return None;
+    };
+    match m {
+        "rofi" => corre(
+            m,
+            &s(&[
+                "-dmenu",
+                "-i",
+                "-format",
+                "i",
+                "-no-custom",
+                "-p",
+                prompt,
+                "-mesg",
+                mesg,
+            ]),
+            Some(&lista),
+        )?
+        .parse()
+        .ok(),
+        "fuzzel" => corre(
+            m,
+            &s(&["--dmenu", "--index", "--prompt", &format!("{prompt}> ")]),
+            Some(&lista),
+        )?
+        .parse()
+        .ok(),
+        "wofi" => corre(m, &s(&["--dmenu", "--prompt", prompt]), Some(&lista)).and_then(por_texto),
+        "kdialog" => {
+            let mut a = s(&["--title", "bicho", "--menu", &titulo]);
+            for (i, f) in limpias.iter().enumerate() {
+                a.push(i.to_string());
+                a.push(f.clone());
+            }
+            corre(m, &a, None)?.parse().ok()
+        }
+        _ => {
+            let mut a = s(&[
+                "--list",
+                "--title",
+                "bicho",
+                "--text",
+                &titulo,
+                "--column",
+                prompt,
+                "--hide-header",
+            ]);
+            a.extend(limpias.iter().cloned());
+            corre(m, &a, None).and_then(por_texto)
+        }
+    }
+}
+
+fn pick_jale(prompt: &str, mesg: &str, filas: &[String], fila: usize) -> Option<usize> {
     let jale = super::home(".local/bin/jale");
     let rasi = super::home(".config/jale/config-edit.rasi");
     let mut cmd = Command::new(&jale);
@@ -376,4 +497,16 @@ fn quienes(l: &L) {
 /// `bicho --auto` (al iniciar sesión): solo si el menú dice que sí.
 pub fn al_iniciar() -> bool {
     lee()["login"].as_bool().unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fuera_de_jale_sin_iconos() {
+        assert_eq!(sin_iconos("\u{f0415}  más bichos"), "más bichos");
+        assert_eq!(sin_iconos("\u{e62b} sí"), "sí");
+        assert_eq!(sin_iconos("¿ocupas ayuda?"), "¿ocupas ayuda?");
+    }
 }
