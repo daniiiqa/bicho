@@ -108,6 +108,12 @@ impl PointerHandler for App {
             let Some(i) = self.cual(&ev.surface) else {
                 continue;
             };
+            // el cursor encima de él (para enseñar su casita, si es de casa)
+            match ev.kind {
+                PointerEventKind::Enter { .. } => self.mascotas[i].bicho.encima = true,
+                PointerEventKind::Leave { .. } => self.mascotas[i].bicho.encima = false,
+                _ => {}
+            }
             match ev.kind {
                 PointerEventKind::Press {
                     button: BOTON_IZQ, ..
@@ -123,6 +129,7 @@ impl PointerHandler for App {
                     });
                 }
                 PointerEventKind::Motion { .. } => {
+                    self.mascotas[i].bicho.mouse_se_movio();
                     let (gx, gy) = self.en_pantalla(i, ev.position);
                     let Some(a) = self.arrastre.as_mut().filter(|a| a.i == i) else {
                         continue;

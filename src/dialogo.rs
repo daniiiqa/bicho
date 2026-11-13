@@ -201,6 +201,7 @@ impl App {
                 piensa: None,
                 alerta: None,
                 reloj: None,
+                casa: false,
                 forma: arte::Forma::Normal,
             },
         ))

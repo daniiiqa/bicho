@@ -133,6 +133,10 @@ impl App {
             .map(|v| viejas.iter().find(|o| o.id == v.id).cloned().unwrap_or(v))
             .collect();
         self.mundo = hypr::Mundo { ventanas, ..nuevo };
+        // sin Hyprland, lo de los paneles lo midió la capa de prueba
+        if self.medidor.is_some() {
+            self.mundo.abajo = self.libre_abajo;
+        }
     }
 
     /// Las ventanas que brincaron lejos se deslizan a su lugar (Hyprland

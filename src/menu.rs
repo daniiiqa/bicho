@@ -142,15 +142,23 @@ fn relanza(lista: &[String]) {
     }
 }
 
-/// Abre a Claude (`claude`) en una terminal, en `dir` (o en tu home). La
-/// lanza Hyprland, así no queda como hija de los animalitos.
+/// Abre a Claude (`claude`) en una terminal, en `dir` (o en tu home). Con
+/// Hyprland la lanza Hyprland (así no queda como hija de los animalitos);
+/// sin Hyprland (KDE, por ejemplo) la abre bicho, suelta.
 pub fn abre_claude(dir: Option<PathBuf>) {
+    let dir = dir
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| super::home(""));
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
+        abre_sin_hyprland(&dir);
+        return;
+    }
     let term = std::env::var("TERMINAL")
         .ok()
         .filter(|t| !t.is_empty() && !t.contains(['"', '\\', '\'']))
         .unwrap_or_else(|| "kitty".into());
     // va dentro de un string de Lua y luego de sh: nada de comillas raras
-    let dir = dir
+    let dir = Some(dir)
         .filter(|d| !d.to_string_lossy().contains(['"', '\\', '\'', '\n']))
         .unwrap_or_else(|| super::home(""));
     let cmd = if term == "kitty" {
@@ -164,6 +172,76 @@ pub fn abre_claude(dir: Option<PathBuf>) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+}
+
+/// La terminal que haya: $TERMINAL, o la de KDE en KDE, o la primera que
+/// encuentre. Con lo que hay que darle para que corra `claude` en `dir`.
+fn terminal(dir: &std::path::Path) -> Option<(String, Vec<String>)> {
+    let d = dir.display().to_string();
+    let args = |t: &str| -> Vec<String> {
+        let v: Vec<&str> = match t {
+            "konsole" => vec!["--workdir", &d, "-e", "claude"],
+            "kitty" => vec!["--directory", &d, "-e", "claude"],
+            "foot" => vec!["claude"],
+            "alacritty" => vec!["--working-directory", &d, "-e", "claude"],
+            "wezterm" => vec!["start", "--cwd", &d, "--", "claude"],
+            "ghostty" => vec!["-e", "claude"],
+            "gnome-terminal" | "kgx" => vec!["--", "claude"],
+            _ => vec!["-e", "claude"],
+        };
+        v.into_iter().map(String::from).collect()
+    };
+    let hay = |t: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(t).is_file()))
+    };
+    let kde = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.to_uppercase().contains("KDE"));
+    let pedida = std::env::var("TERMINAL")
+        .ok()
+        .filter(|t| !t.is_empty() && hay(t));
+    let primero = if kde { "konsole" } else { "kitty" };
+    let candidatas = [
+        primero,
+        "konsole",
+        "kitty",
+        "foot",
+        "alacritty",
+        "wezterm",
+        "ghostty",
+        "gnome-terminal",
+        "kgx",
+        "xterm",
+    ];
+    let t = pedida.or_else(|| candidatas.iter().find(|t| hay(t)).map(|t| t.to_string()))?;
+    let a = args(&t);
+    Some((t, a))
+}
+
+fn abre_sin_hyprland(dir: &std::path::Path) {
+    let Some((t, args)) = terminal(dir) else {
+        return;
+    };
+    let mut cmd = Command::new(&t);
+    cmd.args(&args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // que sea su propia sesión: si guardas a los animalitos, la terminal sigue
+    use std::os::unix::process::CommandExt;
+    // SAFETY: setsid es async-signal-safe
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    // se espera en su hilo (si no, quedaría de zombi al cerrarla)
+    if let Ok(mut hijo) = cmd.spawn() {
+        std::thread::spawn(move || {
+            let _ = hijo.wait();
+        });
+    }
 }
 
 pub fn menu() -> i32 {

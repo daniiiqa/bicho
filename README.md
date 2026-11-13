@@ -4,8 +4,8 @@ Los animalitos de discada: pixeles que se pasean por el escritorio. Caminan
 por el piso, trepan por los lados de las ventanas, se pasean por arriba de
 ellas y se avientan por la orilla. Se sientan, se duermen (más de noche),
 bailan si suena música, a veces persiguen al cursor, y si lo dejas quieto
-cerca brincan con un corazón. Si dos se topan, se saludan. Toman los colores
-del look (wallust) y cambian solos con él.
+cerca brincan con un corazón. Si dos se topan, se saludan, y a veces juegan a la
+correteada. Toman los colores del look (wallust) y cambian solos con él.
 
 - **bicho**: el original, con antenas
 - **michi**: un gato que menea la cola
@@ -37,6 +37,16 @@ bicho shell instala  una línea en ~/.bashrc para que se asusten si truena un
  "climb": true, "dance": true, "login": false}
 ```
 
+## Entre ellos
+
+Si dos se topan, se saludan. Y de vez en cuando, dos libres en el mismo suelo
+(el piso, encima de la misma ventana o dentro de la misma) juegan a la
+correteada: uno la trae y corretea al otro; cuando lo alcanza cambian (al
+agarrado le sale un "!", el que lo agarró se lleva un corazón, y el nuevo
+cuenta un ratito antes de salir). Unas rondas y a descansar, contentos. Si
+andan michi y la baba, michi empieza correteando a la baba. No juegan
+dormidos, platicando, ni claudio con su laptop.
+
 ## Agarrarlos
 
 Arrástralos y suéltalos: salen volando con la velocidad con que los
@@ -48,9 +58,12 @@ les das cariño.
 Si lo sueltas despacito encima de una ventana con **SUPER** apretado, se mete
 y ahí vive (sin SUPER nomás cae): camina por el fondo de la ventana, se va
 con ella si la mueves, se esconde si cambias de escritorio y vuelve contigo,
-y si la cierras cae al piso. Para sacarlo, agárralo. Solitos también se meten
-de vez en cuando (desde arriba de la ventana se clavan para adentro, o desde
-el piso a la que les quede enfrente) y al rato se salen por abajo.
+y si la cierras cae al piso. Los que metes tú son **de casa**: no se salen
+solos (solo si los sacas arrastrándolos o cierras la ventana). Para saber
+cuáles son, pásales el mouse encima: a los de casa les sale una casita. Solitos también
+se meten de vez en cuando (desde arriba de la ventana se clavan para adentro,
+o desde el piso a la que les quede enfrente), pero esos van de paso: al rato
+se salen por abajo.
 
 En una terminal las letras son repisas: brincan de línea en línea, pero solo
 se paran donde caben (arriba de las letras tiene que haber hueco del alto de
@@ -72,7 +85,8 @@ Con los hooks de Claude Code (`bicho claude instala`) sabe cómo va Claude:
 - si Claude te pregunta algo (un permiso, una pregunta) y andas en otra
   ventana, le sale un globo: "¡claude te pregunta algo!" ▶ voy / luego.
   "voy" te lleva a esa ventana. Si claudio anda escondido en una ventana de
-  otro escritorio, se sale y cae donde estás tú
+  otro escritorio, se sale y cae donde estás tú (y si es de casa, al acabar
+  regresa a su ventana)
 
 Si claudio anda metido en la terminal de una sesión, se fija en esa.
 `bicho claude instala` pone esto en `~/.claude/settings.json` sin tocar lo
@@ -129,6 +143,51 @@ bbbbbbbbbbbbbbbb
 
 Si el archivo está mal hecho se queda el dibujo de siempre. Lo blandito de la
 baba no se disfraza.
+
+## Fuera de discada (KDE Plasma y otros)
+
+Funciona en cualquier compositor de Wayland con layer-shell (KDE Plasma,
+Sway, Hyprland…). El binario ya compilado está en la release `edge`:
+
+```sh
+mkdir -p ~/.local/bin
+curl -L https://github.com/daniiiqa/bicho/releases/download/edge/bicho-x86_64-linux -o ~/.local/bin/bicho
+chmod +x ~/.local/bin/bicho
+bicho baba michi claudio
+```
+
+Para que salgan al entrar: en KDE, *Preferencias del sistema → Inicio
+automático → Añadir → Añadir programa* y pon `bicho`. Con Claude Code,
+`bicho claude instala`; con bash, `bicho shell instala`.
+
+Sin Hyprland caminan por el piso (sin pisar los paneles), los agarras, los
+avientas, juegan entre ellos, claudio platica y con un sí abre `claude` en la
+terminal que haya (konsole en KDE). Lo de las ventanas (treparlas, meterse,
+las letras) necesita el IPC de Hyprland, y el menú es el de discada (jale);
+sin él, la config va a mano en `~/.config/bicho/config.json`. Sin los colores
+del look, cada especie trae el suyo.
+
+## Fuera de discada (KDE Plasma, etc.)
+
+Funciona en cualquier compositor Wayland con layer-shell (KDE Plasma, sway,
+Hyprland…). El binario que publica cada push no necesita nada más que glibc:
+
+```sh
+mkdir -p ~/.local/bin
+curl -L https://github.com/daniiiqa/bicho/releases/download/edge/bicho-x86_64-linux -o ~/.local/bin/bicho
+chmod +x ~/.local/bin/bicho
+bicho bicho michi baba claudio
+```
+
+Para que salgan al iniciar sesión en KDE: Preferencias del sistema →
+Arranque automático → Añadir → Programa → `bicho`.
+
+Sin Hyprland caminan por el piso (encima del panel), se agarran, se avientan,
+juegan, bailan, se duermen con el bloqueo de pantalla, y claudio abre
+`claude` en la terminal que haya (konsole en KDE). Lo que sale del socket de
+Hyprland no: trepar y meterse a las ventanas, las letras de las terminales,
+el "voy" del globo y el menú (`bicho menu` usa jale, de discada; sin él, la
+config se edita en `~/.config/bicho/config.json`).
 
 ## Por dentro
 

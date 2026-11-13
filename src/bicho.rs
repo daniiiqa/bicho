@@ -42,6 +42,14 @@ enum Hace {
     Persigue,
     /// lo tienes agarrado con el mouse
     Agarrado,
+    /// jugando a la correteada: `otro_x` es dónde anda el otro; si la trae,
+    /// lo corretea, si no, huye. `cuenta`: lo que le falta de contar antes
+    /// de salir tras el otro (recién lo agarraron)
+    Juega {
+        otro_x: f32,
+        la_trae: bool,
+        cuenta: f32,
+    },
 }
 
 pub struct Bicho {
@@ -99,13 +107,31 @@ pub struct Bicho {
     pub dentro: Option<String>,
     /// su ventana está en otro escritorio: no se pinta
     pub oculto: bool,
+    /// lo metiste tú (con SUPER): es de casa y no se sale solo de su ventana
+    pub de_casa: bool,
+    /// salió de su casa a avisarte algo: al acabar, regresa a esta ventana
+    pub regresa_a: Option<String>,
+    /// le tienes el mouse encima (para enseñar su casita)
+    pub encima: bool,
+    /// cuánto lleva el mouse quieto encima (sin Hyprland: para el cariño)
+    encima_quieto: f32,
+    /// lo que le queda a la casita después de meterlo (s)
+    muestra_casa: f32,
     /// si su ventana es una terminal: las letras donde cabe parado
     pub repisas: Vec<Repisa>,
     /// la ventana de la que anda colgado y su x (para irse con ella)
     ancla: Option<(String, f32)>,
 }
 
+/// Dónde anda parado uno: dentro de qué ventana y encima de qué.
+pub type Suelo<'a> = (Option<&'a str>, Option<&'a str>);
+
 const CORAZON_DURA: f32 = 1.3;
+/// jugando a la correteada: qué tanto más rápido corren
+const PRISA_LA_TRAE: f32 = 1.45;
+const PRISA_HUYE: f32 = 1.25;
+/// cuánto se ve la casita al meterlo a su ventana
+const MUESTRA_CASA: f32 = 2.2;
 /// cuánto le dura el "!"
 const ALERTA_DURA: f32 = 1.4;
 /// cuánto tiene que estar el cursor quieto cerca para que brinque de cariño
@@ -161,6 +187,11 @@ impl Bicho {
             desperezo: false,
             dentro: None,
             oculto: false,
+            de_casa: false,
+            regresa_a: None,
+            encima: false,
+            encima_quieto: 0.0,
+            muestra_casa: 0.0,
             repisas: Vec::new(),
             ancla: None,
         }
@@ -187,7 +218,13 @@ impl Bicho {
     }
 
     fn paso(&self) -> f32 {
-        14.0 * self.s * self.velocidad
+        // jugando corren: el que la trae, tantito más que el que huye
+        let prisa = match self.hace {
+            Hace::Juega { la_trae: true, .. } => PRISA_LA_TRAE,
+            Hace::Juega { .. } => PRISA_HUYE,
+            _ => 1.0,
+        };
+        14.0 * self.s * self.velocidad * prisa
     }
 
     fn plataformas(&self, m: &Mundo, ancho: f32, alto: f32) -> Vec<Plataforma> {
@@ -305,7 +342,9 @@ impl Bicho {
                     .map(|v| v.id.clone())
             };
             if let Some(id) = self.sobre.clone().or_else(enfrente) {
+                // solito: va de paso, al rato se sale
                 self.dentro = Some(id);
+                self.de_casa = false;
                 self.sobre = None;
                 self.brinquito();
                 return;
@@ -333,7 +372,8 @@ impl Bicho {
             }
         }
         // adentro: de vez en cuando se sale por abajo
-        if self.dentro.is_some() && self.azar() < SALIRSE {
+        // (los de casa no: tú los metiste, ahí se quedan)
+        if self.dentro.is_some() && !self.de_casa && self.azar() < SALIRSE {
             self.dentro = None;
             self.brinquito();
             return;
@@ -390,6 +430,7 @@ impl Bicho {
         self.falta -= dt;
         self.corazon = (self.corazon - dt).max(0.0);
         self.alerta = (self.alerta - dt).max(0.0);
+        self.muestra_casa = (self.muestra_casa - dt).max(0.0);
         self.cariño_espera = (self.cariño_espera - dt).max(0.0);
         self.parpadeo = (self.parpadeo - dt).max(0.0);
         self.prox_parpadeo -= dt;
@@ -399,6 +440,10 @@ impl Bicho {
         }
         self.cursor = cursor;
         self.dy = 0.0;
+        // salió de su casa a avisarte algo y ya acabó: de regreso
+        if self.regresa_a.is_some() {
+            self.regresa(m);
+        }
         // metido en una ventana que no se ve: o está en otro escritorio (se
         // esconde con ella) o ya la cerraron (se sale y cae)
         if let Some(id) = self.dentro.clone() {
@@ -408,6 +453,7 @@ impl Bicho {
                     return self.look();
                 }
                 self.dentro = None;
+                self.de_casa = false;
                 self.oculto = false;
                 self.cae();
             }
@@ -438,6 +484,24 @@ impl Bicho {
             }
         }
 
+        // sin Hyprland no se sabe dónde anda el cursor, pero sí si está encima
+        // de él (Wayland avisa): quieto encima un ratito, cariño
+        if cursor.is_none() {
+            self.encima_quieto = if self.encima {
+                self.encima_quieto + dt
+            } else {
+                0.0
+            };
+            if self.encima_quieto > CARIÑO_QUIETO
+                && !self.platica
+                && self.cariño_espera <= 0.0
+                && !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. } | Hace::Agarrado)
+            {
+                self.encima_quieto = 0.0;
+                let der = self.der;
+                self.cariño(der);
+            }
+        }
         // cariño: el cursor quieto cerca lo despierta y brinca (si nomás va
         // pasando, o vienes a agarrarlo, no: que no se te escape)
         if let Some((cx, cy)) = cursor {
@@ -483,6 +547,23 @@ impl Bicho {
         match self.hace.clone() {
             // lo mueve el mouse (arrastra); aquí nomás espera
             Hace::Agarrado => {}
+            Hace::Juega {
+                otro_x,
+                la_trae,
+                cuenta,
+            } => {
+                if cuenta > 0.0 {
+                    // contando, viendo al otro
+                    self.der = otro_x > self.x;
+                    if let Hace::Juega { cuenta: c, .. } = &mut self.hace {
+                        *c -= dt;
+                    }
+                } else {
+                    // el que la trae va hacia el otro; el que huye, al revés
+                    self.der = (otro_x > self.x) == la_trae;
+                    self.anda(dt, &plats);
+                }
+            }
             Hace::Camina => {
                 self.anda(dt, &plats);
                 if self.falta <= 0.0 && self.hace == Hace::Camina {
@@ -689,7 +770,10 @@ impl Bicho {
 
     /// Lo agarras con el mouse: se queda colgando donde lo tengas.
     pub fn agarra(&mut self) {
+        // lo sacaste tú: ya no es de casa (hasta que lo vuelvas a meter)
         self.dentro = None;
+        self.de_casa = false;
+        self.regresa_a = None;
         self.oculto = false;
         self.hace = Hace::Agarrado;
         self.sobre = None;
@@ -759,11 +843,37 @@ impl Bicho {
         self.dentro.is_some() || self.sobre.is_some() || matches!(self.hace, Hace::Trepa { .. })
     }
 
-    /// Lo dejaste encima de una ventana: se mete y ahí se queda (cae hasta
-    /// el fondo de la ventana).
+    /// Se movió el mouse encima de él: vuelve a contar lo quieto.
+    pub fn mouse_se_movio(&mut self) {
+        self.encima_quieto = 0.0;
+    }
+
+    /// Lo dejaste encima de una ventana (con SUPER): se mete, cae hasta el
+    /// fondo y ahí se queda, de casa (no se sale solo).
     pub fn entra(&mut self, ventana: String) {
         self.dentro = Some(ventana);
+        self.de_casa = true;
+        self.regresa_a = None;
         self.corazon = CORAZON_DURA;
+        self.muestra_casa = MUESTRA_CASA;
+    }
+
+    /// Ya te avisó lo que tenía que avisarte: si salió de su casa, regresa a
+    /// ella (si sigue abierta).
+    fn regresa(&mut self, m: &Mundo) {
+        if self.platica || !self.libre() {
+            return;
+        }
+        if let Some(v) = self.regresa_a.take()
+            && m.todas.contains(&v)
+        {
+            self.dentro = Some(v);
+            self.de_casa = true;
+            self.sobre = None;
+            self.ancla = None;
+            // a su ventana: cae adentro (o se esconde con ella si está en otro escritorio)
+            self.cae();
+        }
     }
 
     /// Arrastrándolo: su esquina de arriba a la izquierda va a (x, y). Mira
@@ -798,7 +908,12 @@ impl Bicho {
     /// Anda escondido en una ventana de otro escritorio y hay que avisarte
     /// algo: se sale y cae desde arriba donde estás tú.
     pub fn sal_a_avisar(&mut self, ancho: f32) {
+        // si es de casa, al acabar regresa
+        if self.de_casa {
+            self.regresa_a = self.dentro.clone();
+        }
         self.dentro = None;
+        self.de_casa = false;
         self.oculto = false;
         self.ancla = None;
         self.sobre = None;
@@ -882,14 +997,118 @@ impl Bicho {
         }
     }
 
+    /// Dónde anda parado: dentro de qué ventana y encima de qué (dos con el
+    /// mismo suelo se pueden alcanzar).
+    pub fn suelo(&self) -> Suelo<'_> {
+        (self.dentro.as_deref(), self.sobre.as_deref())
+    }
+
+    /// ¿Está libre para jugar? (ni dormido, ni platicando, ni con su laptop
+    /// o su relojito, ni escondido)
+    pub fn puede_jugar(&self) -> bool {
+        !self.oculto
+            && !self.platica
+            && !self.piensa
+            && !self.espera
+            && matches!(
+                self.hace,
+                Hace::Camina
+                    | Hace::Para
+                    | Hace::Sienta
+                    | Hace::Persigue
+                    | Hace::Baila
+                    | Hace::Juega { .. }
+            )
+    }
+
+    /// ¿Anda jugando? (o en el aire a media correteada, de un brinco)
+    pub fn jugando(&self) -> bool {
+        matches!(self.hace, Hace::Juega { .. })
+            || (self.hace == Hace::Vuela && matches!(self.vuelve, Some(Hace::Juega { .. })))
+    }
+
+    /// A media correteada: dónde anda el otro y si la trae. `cuenta`: que
+    /// cuente un ratito antes de salir (recién lo agarraron).
+    pub fn juega(&mut self, otro_x: f32, la_trae: bool, cuenta: f32) {
+        let puede = self.puede_jugar();
+        match &mut self.hace {
+            Hace::Juega {
+                otro_x: x,
+                la_trae: t,
+                cuenta: c,
+            } => {
+                *x = otro_x;
+                if *t != la_trae {
+                    *t = la_trae;
+                    *c = cuenta;
+                }
+            }
+            // a medio brinco: al caer sigue jugando
+            Hace::Vuela => {
+                if let Some(Hace::Juega {
+                    otro_x: x,
+                    la_trae: t,
+                    ..
+                }) = &mut self.vuelve
+                {
+                    *x = otro_x;
+                    *t = la_trae;
+                }
+            }
+            _ if puede => {
+                self.hace = Hace::Juega {
+                    otro_x,
+                    la_trae,
+                    cuenta,
+                };
+                self.falta = f32::MAX;
+            }
+            _ => {}
+        }
+    }
+
+    /// Se acabó el juego: a descansar (contento, si jugaron bien).
+    pub fn deja_de_jugar(&mut self, contento: bool) {
+        if !self.jugando() {
+            return;
+        }
+        if self.hace == Hace::Vuela {
+            self.vuelve = Some(Hace::Para);
+            self.falta = self.entre(1.0, 2.5);
+            return;
+        }
+        self.hace = Hace::Para;
+        self.falta = self.entre(1.0, 2.5);
+        if contento {
+            let der = self.der;
+            self.cariño(der);
+        }
+    }
+
+    /// ¿Está contando (recién le tocó traerla)?
+    pub fn contando(&self) -> bool {
+        matches!(self.hace, Hace::Juega { cuenta, .. } if cuenta > 0.0)
+    }
+
+    /// Lo acaban de agarrar: "!" (y luego le toca contar).
+    pub fn lo_agarraron(&mut self) {
+        self.alerta = ALERTA_DURA;
+    }
+
+    /// Alcanzó al otro: su corazón (sin brincar, que sigue el juego).
+    pub fn alcanzo(&mut self) {
+        self.corazon = CORAZON_DURA;
+    }
+
     /// Para saludarse con otro: anda suelto y no acaba de saludar.
-    pub fn saludable(&self) -> Option<(f32, Option<&str>)> {
+    pub fn saludable(&self) -> Option<(f32, Suelo<'_>)> {
         let libre = matches!(
             self.hace,
             Hace::Camina | Hace::Para | Hace::Persigue | Hace::Sienta | Hace::Baila
         );
-        (libre && !self.platica && self.cariño_espera <= 0.0)
-            .then_some((self.x, self.sobre.as_deref()))
+        // el mismo suelo, no nomás "encima de lo mismo": uno en el piso y otro
+        // dentro de una ventana no se alcanzan
+        (libre && !self.platica && self.cariño_espera <= 0.0).then_some((self.x, self.suelo()))
     }
 
     fn cae(&mut self) {
@@ -933,7 +1152,7 @@ impl Bicho {
                 }
             }
             h => {
-                let carga = matches!(h, Hace::Camina | Hace::Persigue);
+                let carga = matches!(h, Hace::Camina | Hace::Persigue | Hace::Juega { .. });
                 if carga && self.carga < 0.08 {
                     return Forma::Plasta;
                 }
@@ -968,6 +1187,9 @@ impl Bicho {
         let paso = (self.reloj / 0.14) as u32 % 2 == 1;
         let pose = match &self.hace {
             Hace::Camina | Hace::VaATrepar { .. } | Hace::Persigue => Pose::Camina(paso),
+            // contando: quieto, con las patas juntas
+            Hace::Juega { cuenta, .. } if *cuenta > 0.0 => Pose::Parado,
+            Hace::Juega { .. } => Pose::Camina((self.reloj / 0.09) as u32 % 2 == 1),
             Hace::Baila => Pose::Camina((self.reloj * 4.4) as u32 % 2 == 1),
             Hace::Para => Pose::Parado,
             Hace::Sienta => Pose::Sentado,
@@ -989,6 +1211,7 @@ impl Bicho {
             piensa: (self.piensa && self.hace == Hace::Sienta).then_some(self.reloj),
             alerta: (self.alerta > 0.0).then(|| 1.0 - self.alerta / ALERTA_DURA),
             reloj: (self.espera && !self.piensa && self.hace == Hace::Sienta).then_some(self.reloj),
+            casa: self.de_casa && (self.encima || self.muestra_casa > 0.0),
         }
     }
 }
@@ -1365,6 +1588,129 @@ mod tests {
             }
         }
         assert_eq!(b.y, 700.0 - 1.0 - 60.0, "debió caer encima de la ventana");
+    }
+
+    #[test]
+    fn en_la_correteada_el_que_la_trae_alcanza_al_otro() {
+        for (sa, sb) in [(false, false), (true, false), (false, true)] {
+            let m = mundo(vec![]);
+            let (mut a, mut b) = (en_el_piso(17), en_el_piso(18));
+            (a.salta, b.salta) = (sa, sb);
+            (a.x, b.x) = (700.0, 1000.0);
+            a.juega(b.x, true, 0.0);
+            b.juega(a.x, false, 0.0);
+            let mut alcanzo = false;
+            for _ in 0..900 {
+                a.juega(b.x, true, 0.0);
+                b.juega(a.x, false, 0.0);
+                a.tick(0.033, &m, 1920.0, 1200.0, None);
+                b.tick(0.033, &m, 1920.0, 1200.0, None);
+                assert!(a.jugando() && b.jugando(), "se salieron del juego");
+                if !a.en_el_aire() && !b.en_el_aire() && (a.x - b.x).abs() < a.cw * 0.45 {
+                    alcanzo = true;
+                    break;
+                }
+            }
+            assert!(alcanzo, "nunca lo alcanzó (baba: {sa} {sb})");
+        }
+    }
+
+    #[test]
+    fn dormido_no_juega_y_el_saludo_no_cruza_ventanas() {
+        let mut b = en_el_piso(19);
+        b.hace = Hace::Duerme;
+        assert!(!b.puede_jugar());
+        b.juega(0.0, true, 0.0);
+        assert_eq!(b.hace, Hace::Duerme, "lo despertó el juego");
+        // uno en el piso y otro dentro de una ventana: suelos distintos
+        let piso = en_el_piso(20);
+        let mut dentro = en_el_piso(21);
+        dentro.dentro = Some("a".into());
+        assert_ne!(
+            piso.saludable().map(|s| s.1),
+            dentro.saludable().map(|s| s.1)
+        );
+    }
+
+    #[test]
+    fn los_de_casa_no_se_salen_y_los_de_paso_si() {
+        let ventana = Ventana {
+            id: "a".into(),
+            x: 0.0,
+            y: 600.0,
+            w: 1920.0,
+            h: 600.0,
+        };
+        let mut m = mundo(vec![ventana]);
+        m.todas = vec!["a".into()];
+        let mut b = Bicho::new(3.0, 48.0, 60.0, 22);
+        (b.x, b.y) = (900.0, 1140.0);
+        b.entra("a".into());
+        for _ in 0..20000 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+            assert_eq!(b.dentro.as_deref(), Some("a"), "se salió uno de casa");
+        }
+        // sale a avisarte algo y, al acabar, regresa a su casa
+        b.sal_a_avisar(1920.0);
+        b.platica = true;
+        for _ in 0..60 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        assert!(b.dentro.is_none(), "platicando se queda afuera");
+        b.platica = false;
+        for _ in 0..300 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        assert_eq!(b.dentro.as_deref(), Some("a"), "no regresó a su casa");
+        assert!(b.de_casa);
+        // si lo sacas tú, ya no es de casa
+        b.agarra();
+        assert!(!b.de_casa && b.dentro.is_none());
+    }
+
+    #[test]
+    fn la_casita_sale_al_meterlo_y_con_el_mouse_encima() {
+        let ventana = Ventana {
+            id: "a".into(),
+            x: 0.0,
+            y: 600.0,
+            w: 1920.0,
+            h: 600.0,
+        };
+        let mut m = mundo(vec![ventana]);
+        m.todas = vec!["a".into()];
+        let mut b = en_el_piso(23);
+        assert!(
+            !b.tick(0.033, &m, 1920.0, 1200.0, None).casa,
+            "sin casa no hay casita"
+        );
+        b.encima = true;
+        assert!(
+            !b.tick(0.033, &m, 1920.0, 1200.0, None).casa,
+            "aunque le pases el mouse"
+        );
+        b.encima = false;
+        b.entra("a".into());
+        assert!(
+            b.tick(0.033, &m, 1920.0, 1200.0, None).casa,
+            "al meterlo, su casita"
+        );
+        for _ in 0..100 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        let look = b.tick(0.033, &m, 1920.0, 1200.0, None);
+        assert!(!look.casa, "y luego se quita");
+        b.encima = true;
+        let look = b.tick(0.033, &m, 1920.0, 1200.0, None);
+        assert!(look.casa, "con el mouse encima, otra vez");
+        // y no agranda dónde se le da clic (la casita no es cuerpo)
+        let mut sin = b.tick(0.033, &m, 1920.0, 1200.0, None);
+        sin.casa = false;
+        let e = &crate::arte::BICHO;
+        assert_eq!(
+            crate::arte::caja(&crate::arte::grid(e, &look)),
+            crate::arte::caja(&crate::arte::grid(e, &sin))
+        );
     }
 
     #[test]

@@ -33,6 +33,7 @@ mod claudio;
 mod dialogo;
 mod globo;
 mod hypr;
+mod juego;
 mod menu;
 mod mouse;
 mod reacciones;
@@ -307,6 +308,7 @@ fn ver() {
                     piensa: None,
                     alerta: None,
                     reloj: None,
+                    casa: false,
                     forma: arte::Forma::Normal,
                 };
                 arte::terminal(&arte::grid(e, &look), &colores)
@@ -345,6 +347,7 @@ fn ver() {
                         piensa: None,
                         alerta: None,
                         reloj: None,
+                        casa: false,
                         forma,
                     };
                     arte::terminal(&arte::grid(e, &look), &colores)
@@ -507,6 +510,7 @@ fn cuerpo(e: &'static arte::Especie, celda: f32) -> (f32, f32, f32) {
         piensa: None,
         alerta: None,
         reloj: None,
+        casa: false,
         forma: arte::Forma::Normal,
     };
     let (x0, y0, x1, y1) =
@@ -549,6 +553,12 @@ struct App {
     compilando: HashMap<String, (bool, f32)>,
     /// cuándo tronó lo último en cada shell (bicho shell): pid → hora
     truenos: HashMap<i32, u64>,
+    /// sin Hyprland: la capa que mide cuánto ocupan los paneles, y eso
+    medidor: Option<LayerSurface>,
+    libre_abajo: f32,
+    /// la correteada en curso, y en cuánto intentan otra
+    juego: Option<juego::Juego>,
+    cada_juego: f32,
     /// el hilo que ve las letras de las terminales
     texto: texto::Compartido,
     shm: Shm,
@@ -600,6 +610,28 @@ impl App {
         }
         self.monitor = info.name.clone();
         self.pantalla = (w as f32, h as f32);
+        // sin Hyprland no se sabe cuánto miden los paneles (KDE): una capa
+        // invisible pegada a las cuatro orillas, que el compositor acomoda en
+        // lo que dejan libre
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() && self.medidor.is_none() {
+            let surface = self.compositor.create_surface(&self.qh);
+            if let Ok(region) = Region::new(&self.compositor) {
+                surface.set_input_region(Some(region.wl_region()));
+            }
+            let capa = self.layer_shell.create_layer_surface(
+                &self.qh,
+                surface,
+                Layer::Bottom,
+                Some("bicho-medidor"),
+                Some(&output),
+            );
+            capa.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+            capa.set_exclusive_zone(0);
+            capa.set_keyboard_interactivity(KeyboardInteractivity::None);
+            capa.set_size(0, 0);
+            capa.commit();
+            self.medidor = Some(capa);
+        }
         let px = self.cfg.escala;
         for (i, nombre) in self.cfg.pets.clone().iter().enumerate() {
             let Some(especie) = arte::especie(nombre) else {
@@ -702,6 +734,7 @@ impl App {
         self.tick_teclado(dt);
         self.tick_claude(dt);
         self.tick_reacciones(dt);
+        self.tick_juego(dt);
         let mut looks = Vec::with_capacity(self.mascotas.len());
         for p in &mut self.mascotas {
             p.bicho.musica = musica;
@@ -870,6 +903,10 @@ fn vive(cfg: Config) -> Result<(), String> {
         arre_next: None,
         compilando: HashMap::new(),
         truenos: HashMap::new(),
+        medidor: None,
+        libre_abajo: 0.0,
+        juego: None,
+        cada_juego: 20.0,
         texto: texto::arranca(),
         shm: Shm::bind(&globals, &qh).map_err(|_| "el compositor no tiene wl_shm")?,
         qh,
@@ -975,6 +1012,9 @@ impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         if self.dialogo.as_ref().is_some_and(|d| &d.layer == layer) {
             self.cierra_dialogo();
+        } else if self.medidor.as_ref() == Some(layer) {
+            // la capa que mide los paneles: sin ella, se queda lo último medido
+            self.medidor = None;
         } else {
             self.exit = true;
         }
@@ -984,9 +1024,18 @@ impl LayerShellHandler for App {
         _: &Connection,
         _: &QueueHandle<Self>,
         layer: &LayerSurface,
-        _: LayerSurfaceConfigure,
+        cfg: LayerSurfaceConfigure,
         _: u32,
     ) {
+        // la capa que mide: lo que falta de alto son los paneles (los de KDE
+        // vienen abajo)
+        if self.medidor.as_ref() == Some(layer) {
+            let alto = cfg.new_size.1 as f32;
+            if alto > 0.0 {
+                self.libre_abajo = (self.pantalla.1 - alto).max(0.0);
+            }
+            return;
+        }
         match self.dialogo.as_mut() {
             Some(d) if &d.layer == layer => d.configurado = true,
             _ => self.configurado = true,

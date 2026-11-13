@@ -155,7 +155,8 @@ pub const BICHO: Especie = Especie {
     brinca: false,
     blanda: None,
     invoca: false,
-    color: &["acc", "color12"],
+    // sin colores del look (fuera de discada): el suyo
+    color: &["acc", "color12", "#7aa2f7"],
 };
 
 pub const MICHI: Especie = Especie {
@@ -189,7 +190,7 @@ pub const MICHI: Especie = Especie {
     brinca: false,
     blanda: None,
     invoca: false,
-    color: &["color4", "color13", "color12"],
+    color: &["color4", "color13", "color12", "#e0af68"],
 };
 
 pub const BABA: Especie = Especie {
@@ -212,7 +213,7 @@ pub const BABA: Especie = Especie {
     brinca: true,
     blanda: Some(&BABA_BLANDA),
     invoca: false,
-    color: &["color10", "color2", "color11"],
+    color: &["color10", "color2", "color11", "#9ece6a"],
 };
 
 /// claudio: el bichito de Claude, que lo hizo para acordarse de cuando
@@ -406,6 +407,9 @@ pub struct Look {
     pub alerta: Option<f32>,
     /// fase del relojito (esperando a que acabe de compilar)
     pub reloj: Option<f32>,
+    /// su casita arriba: es de casa (lo metiste tú a su ventana) y le pasaste
+    /// el mouse encima, o acabas de meterlo
+    pub casa: bool,
     /// cómo va deformado (solo los blanditos)
     pub forma: Forma,
 }
@@ -515,6 +519,10 @@ fn sello(g: &mut Grid, dibujo: &[&str], col: i32, renglon: i32, color: u8) {
 const CORAZON_DIBUJO: [&str; 4] = [".r.r.", "rrrrr", ".rrr.", "..r.."];
 const Z_DIBUJO: [&str; 3] = ["zzz", ".z.", "zzz"];
 const ALERTA_DIBUJO: [&str; 5] = ["r", "r", "r", ".", "r"];
+/// la casita de los que son de casa
+const CASA_DIBUJO: [&str; 6] = [
+    "...z...", "..zzz..", ".zzzzz.", "zzzzzzz", ".zz.zz.", ".zz.zz.",
+];
 /// el relojito de esperar: la manecilla da la vuelta
 const RELOJ_DIBUJO: [[&str; 5]; 4] = [
     [".zzz.", "z.z.z", "z.z.z", "z...z", ".zzz."],
@@ -608,6 +616,9 @@ pub fn grid(e: &Especie, look: &Look) -> Grid {
     if let Some(t) = look.reloj {
         let cuadro = &RELOJ_DIBUJO[(t * 1.5) as usize % RELOJ_DIBUJO.len()];
         sello(&mut g, cuadro, lado(10, 5), (tope - 6).max(0), ZZZ);
+    }
+    if look.casa && look.alerta.is_none() && look.reloj.is_none() {
+        sello(&mut g, &CASA_DIBUJO, lado(9, 7), (tope - 7).max(0), ZZZ);
     }
     if let Some(t) = look.notas {
         for (k, col) in [(0.0, 1), (0.5, 11)] {
@@ -732,6 +743,7 @@ mod tests {
             piensa: None,
             alerta: None,
             reloj: None,
+            casa: false,
             forma: Forma::Normal,
         };
         for e in TODAS {
@@ -773,6 +785,7 @@ bbbbbbbbbbbbbbbb
                 piensa: None,
                 alerta: None,
                 reloj: None,
+                casa: false,
                 forma: Forma::Normal,
             };
             grid(&d, &look)
@@ -817,6 +830,7 @@ bbbbbbbbbbbbbbbb
                 piensa: None,
                 alerta: None,
                 reloj: None,
+                casa: false,
                 forma: Forma::Normal,
             };
             assert!(

@@ -45,10 +45,17 @@ impl App {
         }
     }
 
-    /// Bloqueada la sesión (chapa o hyprlock): a dormir; al volver, se
-    /// despiertan.
+    /// Bloqueada la sesión (chapa, hyprlock, el de KDE…): a dormir; al volver,
+    /// se despiertan.
     fn chapa(&mut self) {
-        let bloqueada = proceso_vivo(&["chapa", "hyprlock"]);
+        // chapa en discada; los de Hyprland, sway, GNOME… y el de KDE
+        let bloqueada = proceso_vivo(&[
+            "chapa",
+            "hyprlock",
+            "swaylock",
+            "gtklock",
+            "kscreenlocker_g",
+        ]);
         if bloqueada != self.bloqueada {
             for p in &mut self.mascotas {
                 if bloqueada {
