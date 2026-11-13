@@ -160,34 +160,22 @@ Para que salgan al entrar: en KDE, *Preferencias del sistema → Inicio
 automático → Añadir → Añadir programa* y pon `bicho`. Con Claude Code,
 `bicho claude instala`; con bash, `bicho shell instala`.
 
-Sin Hyprland caminan por el piso (sin pisar los paneles), los agarras, los
-avientas, juegan entre ellos, claudio platica y con un sí abre `claude` en la
-terminal que haya (konsole en KDE). Lo de las ventanas (treparlas, meterse,
-las letras) necesita el IPC de Hyprland, y el menú es el de discada (jale);
-sin él, la config va a mano en `~/.config/bicho/config.json`. Sin los colores
-del look, cada especie trae el suyo.
+En **KDE Plasma** bicho le carga a KWin un script chiquito (las apps de
+Wayland no pueden ver las ventanas de las demás; KWin sí) que le va contando
+por D-Bus dónde están las ventanas y el cursor. Con eso trepan, caminan
+encima, se meten (y se quedan, si los metes tú), se van con la ventana, y el
+"voy" del globo de claudio enfoca la ventana. Lo que no hay en KDE: brincar en
+las letras de las terminales (KWin no deja fotografiarlas) y el menú
+(`bicho menu` usa jale, de discada; la config se edita en
+`~/.config/bicho/config.json`).
 
-## Fuera de discada (KDE Plasma, etc.)
+En otros compositores sin Hyprland ni KWin caminan por el piso (encima del
+panel), se agarran, se avientan, juegan y se duermen con el bloqueo de
+pantalla, y claudio abre `claude` en la terminal que haya.
 
-Funciona en cualquier compositor Wayland con layer-shell (KDE Plasma, sway,
-Hyprland…). El binario que publica cada push no necesita nada más que glibc:
-
-```sh
-mkdir -p ~/.local/bin
-curl -L https://github.com/daniiiqa/bicho/releases/download/edge/bicho-x86_64-linux -o ~/.local/bin/bicho
-chmod +x ~/.local/bin/bicho
-bicho bicho michi baba claudio
-```
-
-Para que salgan al iniciar sesión en KDE: Preferencias del sistema →
-Arranque automático → Añadir → Programa → `bicho`.
-
-Sin Hyprland caminan por el piso (encima del panel), se agarran, se avientan,
-juegan, bailan, se duermen con el bloqueo de pantalla, y claudio abre
-`claude` en la terminal que haya (konsole en KDE). Lo que sale del socket de
-Hyprland no: trepar y meterse a las ventanas, las letras de las terminales,
-el "voy" del globo y el menú (`bicho menu` usa jale, de discada; sin él, la
-config se edita en `~/.config/bicho/config.json`).
+Si algo no sale, `BICHO_DEBUG=1 bicho` escribe cada 2 s en
+`$XDG_RUNTIME_DIR/bicho/debug.txt` lo que sabe del mundo y dónde anda cada
+quien.
 
 ## Por dentro
 

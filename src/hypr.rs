@@ -77,7 +77,7 @@ pub struct Mundo {
 }
 
 /// ¿La ventana de ese pid es una terminal?
-fn es_terminal(pid: i64) -> bool {
+pub(crate) fn es_terminal(pid: i64) -> bool {
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
     matches!(
         comm.trim(),
@@ -95,6 +95,10 @@ fn es_terminal(pid: i64) -> bool {
 }
 
 pub fn mundo(monitor: &str, borde: f32) -> Mundo {
+    // en KDE las cuenta el script de KWin
+    if let Some(m) = crate::kde::mundo() {
+        return m;
+    }
     let mons = pide("monitors");
     let Some(m) = mons
         .as_array()
@@ -169,6 +173,9 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
 /// La ventana que se ve en (x, y) (coordenadas del monitor) en el escritorio
 /// de ahorita: su address. Si se enciman, la que tuvo el foco más reciente.
 pub fn ventana_en(monitor: &str, x: f32, y: f32) -> Option<String> {
+    if crate::kde::activo() {
+        return crate::kde::ventana_en(x, y);
+    }
     let mons = pide("monitors");
     let m = mons.as_array()?.iter().find(|m| m["name"] == monitor)?;
     let (gx, gy) = (x + f(&m["x"]), y + f(&m["y"]));
@@ -202,6 +209,9 @@ pub fn ventana_en(monitor: &str, x: f32, y: f32) -> Option<String> {
 
 /// ¿Hay alguna capa (layer-shell) con ese namespace? (el telón de farula)
 pub fn hay_capa(namespace: &str) -> bool {
+    if crate::kde::activo() {
+        return false;
+    }
     fn busca(v: &Value, ns: &str) -> bool {
         match v {
             Value::Object(o) => {
@@ -247,11 +257,18 @@ pub fn compilando(pid: i32) -> bool {
 
 /// La ventana que tiene el foco (su address).
 pub fn activa() -> Option<String> {
+    if crate::kde::activo() {
+        return crate::kde::activa();
+    }
     pide("activewindow")["address"].as_str().map(String::from)
 }
 
 /// Enfoca esa ventana (y su escritorio).
 pub fn enfoca(id: &str) {
+    if crate::kde::activo() {
+        crate::kde::enfoca(id);
+        return;
+    }
     if id.starts_with("0x") && id[2..].chars().all(|c| c.is_ascii_hexdigit()) {
         let _ = std::process::Command::new("hyprctl")
             .args([
@@ -300,6 +317,9 @@ pub fn ventana_de(m: &Mundo, pids: &[i32]) -> Option<String> {
 
 /// El pid de la ventana con ese address.
 pub fn pid_de(id: &str) -> Option<i32> {
+    if crate::kde::activo() {
+        return crate::kde::pid_de(id);
+    }
     pide("clients")
         .as_array()?
         .iter()
@@ -350,6 +370,9 @@ pub fn borde() -> f32 {
 
 /// El cursor en coordenadas del monitor que empieza en `origen`.
 pub fn cursor(origen: (f32, f32)) -> Option<(f32, f32)> {
+    if crate::kde::activo() {
+        return crate::kde::cursor();
+    }
     let c = pide("cursorpos");
     c.is_object()
         .then(|| (f(&c["x"]) - origen.0, f(&c["y"]) - origen.1))

@@ -20,6 +20,14 @@ impl App {
     /// Las terminales con animalitos adentro: se le piden al hilo, y lo que
     /// ya vio se les pasa como repisas.
     pub(crate) fn letras(&mut self) {
+        // en KDE no hay cómo fotografiar las terminales (grim necesita el
+        // protocolo de captura de wlroots): sin letras, nomás su fondo
+        if kde::activo() {
+            for p in &mut self.mascotas {
+                p.bicho.repisas.clear();
+            }
+            return;
+        }
         let m = &self.mundo;
         let (ox, oy) = m.origen;
         let mut tapar: Vec<texto::Rect> = self

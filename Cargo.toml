@@ -9,6 +9,7 @@ license = "MIT"
 libc = "0.2"
 serde_json = { version = "1", features = ["preserve_order"] }
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 
 [profile.release]
 lto = true

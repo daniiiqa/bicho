@@ -34,6 +34,7 @@ mod dialogo;
 mod globo;
 mod hypr;
 mod juego;
+mod kde;
 mod menu;
 mod mouse;
 mod reacciones;
@@ -556,6 +557,8 @@ struct App {
     /// sin Hyprland: la capa que mide cuánto ocupan los paneles, y eso
     medidor: Option<LayerSurface>,
     libre_abajo: f32,
+    /// cada cuánto escribe el diagnóstico (BICHO_DEBUG)
+    cada_debug: f32,
     /// la correteada en curso, y en cuánto intentan otra
     juego: Option<juego::Juego>,
     cada_juego: f32,
@@ -610,6 +613,10 @@ impl App {
         }
         self.monitor = info.name.clone();
         self.pantalla = (w as f32, h as f32);
+        // en KDE las ventanas vienen en coordenadas globales
+        if let Some((x, y)) = info.logical_position {
+            kde::pon_origen((x as f32, y as f32));
+        }
         // sin Hyprland no se sabe cuánto miden los paneles (KDE): una capa
         // invisible pegada a las cuatro orillas, que el compositor acomoda en
         // lo que dejan libre
@@ -713,6 +720,7 @@ impl App {
                 texto::devuelve_memoria();
             }
             noche = Some(es_de_noche());
+            self.diagnostico();
             let m = mtime(&colores_path());
             if m != self.colores_mtime {
                 self.colores_mtime = m;
@@ -763,6 +771,46 @@ impl App {
             self.pinta(i, &g);
         }
         self.tick_dialogo(dt);
+    }
+
+    /// Con BICHO_DEBUG=1: lo que sabe del mundo y dónde anda cada quien, en
+    /// $XDG_RUNTIME_DIR/bicho/debug.txt (cada 2 s). Para ver qué pasa en una
+    /// máquina que no es la tuya.
+    fn diagnostico(&mut self) {
+        if std::env::var_os("BICHO_DEBUG").is_none() {
+            return;
+        }
+        self.cada_debug -= 0.4;
+        if self.cada_debug > 0.0 {
+            return;
+        }
+        self.cada_debug = 2.0;
+        let m = &self.mundo;
+        let mut s = format!(
+            "pantalla {:?} origen {:?} abajo {} arriba {} kde {} cursor {:?}\nventanas:\n",
+            self.pantalla,
+            m.origen,
+            m.abajo,
+            m.arriba,
+            kde::activo(),
+            self.cursor
+        );
+        for v in &m.ventanas {
+            let cli = if m.clis.contains(&v.id) {
+                " (terminal)"
+            } else {
+                ""
+            };
+            s += &format!(
+                "  {} {:.0},{:.0} {:.0}x{:.0}{cli}\n",
+                v.id, v.x, v.y, v.w, v.h
+            );
+        }
+        s += "bichos:\n";
+        for p in &self.mascotas {
+            s += &format!("  {} {}\n", p.especie.nombre, p.bicho.resumen());
+        }
+        let _ = std::fs::write(runtime().join("bicho/debug.txt"), s);
     }
 
     fn pinta(&mut self, i: usize, g: &arte::Grid) {
@@ -839,6 +887,8 @@ impl App {
 fn run(pets: &[String]) -> Result<(), String> {
     std::panic::set_hook(Box::new(|info| bitacora(&format!("tronó: {info}"))));
     texto::memoria_ajustada();
+    // sin Hyprland, en KDE: las ventanas las cuenta un script de KWin
+    kde::arranca();
     // donde el shell deja sus "truena" (bicho shell) y los hooks de Claude
     let _ = std::fs::create_dir_all(runtime().join("bicho"));
     // nunca dos a la vez
@@ -854,6 +904,8 @@ fn run(pets: &[String]) -> Result<(), String> {
     std::fs::write(pidfile(), std::process::id().to_string()).map_err(|e| e.to_string())?;
     let _ = std::fs::write(petsfile(), cfg.pets.join(" "));
     let r = vive(cfg);
+    // el script de KWin, fuera (si estábamos en KDE)
+    kde::termina();
     let _ = std::fs::remove_file(pidfile());
     r
 }
@@ -905,6 +957,7 @@ fn vive(cfg: Config) -> Result<(), String> {
         truenos: HashMap::new(),
         medidor: None,
         libre_abajo: 0.0,
+        cada_debug: 0.0,
         juego: None,
         cada_juego: 20.0,
         texto: texto::arranca(),

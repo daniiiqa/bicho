@@ -837,6 +837,14 @@ impl Bicho {
         matches!(self.hace, Hace::Vuela | Hace::Agarrado)
     }
 
+    /// Para el diagnóstico: dónde anda y qué hace.
+    pub fn resumen(&self) -> String {
+        format!(
+            "{:.0},{:.0} {:?} dentro {:?} sobre {:?} oculto {} de_casa {}",
+            self.x, self.y, self.hace, self.dentro, self.sobre, self.oculto, self.de_casa
+        )
+    }
+
     /// ¿Anda en una ventana (adentro o encima)? Entonces hay que ver las
     /// ventanas seguido, para irse con ella si la mueves.
     pub fn pegado(&self) -> bool {
