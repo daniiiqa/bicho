@@ -50,6 +50,9 @@ pub struct Repisa {
     pub y: f32,
     pub x0: f32,
     pub x1: f32,
+    /// arriba hay hueco para su cuerpo (solitos solo se paran en estas; si
+    /// tú lo pones en otra línea, ahí se queda)
+    pub cabe: bool,
 }
 
 #[derive(Default)]
@@ -311,15 +314,13 @@ pub fn repisas_con(img: &Imagen, p: &Pedido, taller: &mut Taller) -> Vec<Repisa>
             y1 += 1;
         }
         y = y1 + 1;
-        if y0 < alto {
-            continue;
-        }
+        let arriba_libre = y0 >= alto;
         // por columna: ¿hay letras en la línea? ¿cuánto hueco hay arriba?
         let con: Vec<bool> = (0..w)
             .map(|x| (y0..=y1).any(|yy| tinta[yy * w + x]))
             .collect();
         let libre: Vec<bool> = (0..w)
-            .map(|x| (y0 - alto..y0).all(|yy| !tinta[yy * w + x]))
+            .map(|x| arriba_libre && (y0 - alto..y0).all(|yy| !tinta[yy * w + x]))
             .collect();
         // los tramos de letras (los huecos chicos no cortan)
         let mut tramos: Vec<(usize, usize)> = Vec::new();
@@ -328,6 +329,19 @@ pub fn repisas_con(img: &Imagen, p: &Pedido, taller: &mut Taller) -> Vec<Repisa>
                 Some(t) if x - t.1 <= HUECO => t.1 = x,
                 _ => tramos.push((x, x)),
             }
+        }
+        // cada tramo, entero, como línea donde se puede quedar si tú lo pones
+        // (aunque arriba haya letras)
+        for &(s0, s1) in &tramos {
+            let medio = cw / 2.0;
+            let a = (s0 as f32 - medio).max(0.0);
+            let b = (s1 as f32 - medio).max(a).min(w as f32 - cw).max(a);
+            out.push(Repisa {
+                y: dy + y0 as f32 - ch,
+                x0: dx + a,
+                x1: dx + b,
+                cabe: false,
+            });
         }
         for (s0, s1) in tramos {
             // dónde puede ir el lienzo: con el centro sobre las letras y el
@@ -342,6 +356,7 @@ pub fn repisas_con(img: &Imagen, p: &Pedido, taller: &mut Taller) -> Vec<Repisa>
                         y: dy + y0 as f32 - ch,
                         x0: dx + a as f32,
                         x1: dx + b as f32,
+                        cabe: true,
                     });
                 }
             };
@@ -398,7 +413,10 @@ mod tests {
     fn se_para_en_la_linea_si_cabe_arriba() {
         // una línea larga abajo (y=200) con todo libre arriba
         let img = terminal(600, 300, &[(20, 200, 400, 16)]);
-        let r = repisas(&img, &pedido(600.0, 300.0));
+        let r: Vec<Repisa> = repisas(&img, &pedido(600.0, 300.0))
+            .into_iter()
+            .filter(|r| r.cabe)
+            .collect();
         assert_eq!(r.len(), 1, "{r:?}");
         assert_eq!(r[0].y, 200.0 - 60.0);
         assert!(r[0].x0 >= 0.0 && r[0].x1 <= 420.0);
@@ -409,13 +427,22 @@ mod tests {
         // dos líneas pegadas: en la de abajo no cabe (la de arriba estorba),
         // en la de arriba sí
         let img = terminal(600, 300, &[(20, 180, 400, 16), (20, 200, 400, 16)]);
-        let r = repisas(&img, &pedido(600.0, 300.0));
-        assert!(r.iter().all(|r| r.y == 180.0 - 60.0), "{r:?}");
+        let todas = repisas(&img, &pedido(600.0, 300.0));
+        assert!(
+            todas.iter().filter(|r| r.cabe).all(|r| r.y == 180.0 - 60.0),
+            "{todas:?}"
+        );
+        // pero la de abajo sí sale, como "no cabe": ahí se queda si tú lo pones
+        assert!(
+            todas.iter().any(|r| !r.cabe && r.y == 200.0 - 60.0),
+            "{todas:?}"
+        );
         // pero si la de abajo es más larga, en lo que sobra sí cabe
         let img = terminal(600, 300, &[(20, 180, 100, 16), (20, 200, 500, 16)]);
         let r = repisas(&img, &pedido(600.0, 300.0));
         assert!(
-            r.iter().any(|r| r.y == 200.0 - 60.0 && r.x0 > 120.0 - 10.0),
+            r.iter()
+                .any(|r| r.cabe && r.y == 200.0 - 60.0 && r.x0 > 120.0 - 10.0),
             "{r:?}"
         );
     }
@@ -426,7 +453,7 @@ mod tests {
         let img = terminal(300, 200, &[(20, 150, 200, 16)]);
         let mut p = pedido(1000.0, 800.0);
         p.zona = (100.0 + 200.0, 50.0 + 100.0, 300.0, 200.0);
-        let r = repisas(&img, &p);
+        let r: Vec<Repisa> = repisas(&img, &p).into_iter().filter(|r| r.cabe).collect();
         assert_eq!(r.len(), 1, "{r:?}");
         assert_eq!(r[0].y, 100.0 + 150.0 - 60.0);
         assert!(r[0].x0 >= 200.0 && r[0].x1 <= 200.0 + 220.0, "{r:?}");

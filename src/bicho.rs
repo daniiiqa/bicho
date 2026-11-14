@@ -18,6 +18,9 @@ struct Plataforma {
     x0: f32,
     x1: f32,
     y: f32,
+    /// solito puede caer aquí (las líneas de letras sin hueco arriba no:
+    /// esas son nomás para cuando tú lo pones)
+    cabe: bool,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -113,6 +116,11 @@ pub struct Bicho {
     pub regresa_a: Option<String>,
     /// le tienes el mouse encima (para enseñar su casita)
     pub encima: bool,
+    /// recién metido: lo que le queda de esperar a ver las letras (s)
+    espera_repisas: f32,
+    /// la línea de letras donde tú lo pusiste: ahí se queda (no brinca a
+    /// otra ni se avienta) mientras siga en ella
+    puesto_en: Option<String>,
     /// cuánto lleva el mouse quieto encima (sin Hyprland: para el cariño)
     encima_quieto: f32,
     /// lo que le queda a la casita después de meterlo (s)
@@ -149,6 +157,13 @@ const BRINCA_VENTANAS: f32 = 0.3;
 const TREPA: f32 = 0.45;
 /// en la orilla de una ventana, sin a dónde brincar: chance de aventarse
 const AVIENTA: f32 = 0.25;
+/// recién metido a una terminal: lo más que espera a ver las letras (s)
+const ESPERA_REPISAS: f32 = 0.8;
+/// al meterlo: qué tan lejos de sus patas busca una línea donde acomodarse (px)
+const ACOMODA: f32 = 30.0;
+/// parado en una línea: cuánto se le puede mover sin que se caiga (px)
+const TOLERA_Y: f32 = 8.0;
+const TOLERA_X: f32 = 12.0;
 /// lo que le alcanza un brinco (px): para arriba, para abajo y de lado
 const ALCANCE_ARRIBA: f32 = 170.0;
 const ALCANCE_ABAJO: f32 = 420.0;
@@ -200,6 +215,8 @@ impl Bicho {
             de_casa: false,
             regresa_a: None,
             encima: false,
+            espera_repisas: 0.0,
+            puesto_en: None,
             encima_quieto: 0.0,
             muestra_casa: 0.0,
             repisas: Vec::new(),
@@ -251,6 +268,7 @@ impl Bicho {
                 x0,
                 x1,
                 y: v.y + v.h - self.ch,
+                cabe: true,
             }];
             // las letras de la terminal (cada línea se llama por su altura:
             // si el texto se recorre, se le va el piso y cae)
@@ -263,6 +281,7 @@ impl Bicho {
                         x0: rx0,
                         x1: rx1,
                         y,
+                        cabe: r.cabe,
                     });
                 }
             }
@@ -273,6 +292,7 @@ impl Bicho {
             x0: 0.0,
             x1: (ancho - self.cw).max(0.0),
             y: alto - m.abajo - self.ch,
+            cabe: true,
         }];
         for v in &m.ventanas {
             let y = v.y - m.borde - self.ch;
@@ -291,6 +311,7 @@ impl Bicho {
                 x0,
                 x1,
                 y,
+                cabe: true,
             });
         }
         p
@@ -367,7 +388,7 @@ impl Bicho {
         } else {
             BRINCA_VENTANAS
         };
-        if self.trepa && self.azar() < chance {
+        if self.trepa && !self.en_su_linea() && self.azar() < chance {
             let plats = self.plataformas(m, ancho, alto);
             let cerca = self.alcanzables(&plats, None);
             let arriba: Vec<&Plataforma> = cerca
@@ -494,9 +515,35 @@ impl Bicho {
         // ¿lo que pisa sigue ahí? (la ventana se cerró, se movió o cambiaste
         // de escritorio)
         if !matches!(self.hace, Hace::Vuela | Hace::Trepa { .. } | Hace::Agarrado) {
-            match plats.iter().find(|p| p.ventana == self.sobre) {
-                Some(p) if self.x >= p.x0 - 2.0 && self.x <= p.x1 + 2.0 => self.y = p.y,
-                _ => self.cae(),
+            let exacta = plats
+                .iter()
+                .find(|p| p.ventana == self.sobre && self.x >= p.x0 - 2.0 && self.x <= p.x1 + 2.0);
+            // parado en una línea de letras: si la línea se movió tantito (el
+            // cursor que parpadea la hace más alta o más corta), se queda en
+            // ella en vez de caerse
+            let linea = || {
+                let suya = self.sobre.as_deref()?.split_once('#')?.0;
+                plats.iter().find(|p| {
+                    p.ventana
+                        .as_deref()
+                        .and_then(|v| v.split_once('#'))
+                        .is_some_and(|(v, _)| v == suya)
+                        && (p.y - self.y).abs() <= TOLERA_Y
+                        && self.x >= p.x0 - TOLERA_X
+                        && self.x <= p.x1 + TOLERA_X
+                })
+            };
+            match exacta.or_else(linea) {
+                Some(p) => {
+                    // si era su línea y se movió tantito, sigue siendo la suya
+                    if self.puesto_en.is_some() && self.puesto_en == self.sobre {
+                        self.puesto_en = p.ventana.clone();
+                    }
+                    self.sobre = p.ventana.clone();
+                    self.x = self.x.clamp(p.x0, p.x1);
+                    self.y = p.y;
+                }
+                None => self.cae(),
             }
         }
 
@@ -668,6 +715,41 @@ impl Bicho {
                 }
             }
             Hace::Vuela => {
+                // recién metido a una terminal: flota hasta que se vean las
+                // letras (la foto tarda), y se acomoda en la línea que tenga
+                // más cerca de las patas (aunque lo hayas soltado tantito abajo)
+                if self.espera_repisas > 0.0 {
+                    let cli = self.dentro.as_ref().is_some_and(|d| m.clis.contains(d));
+                    let lineas: Vec<&Plataforma> = plats
+                        .iter()
+                        .filter(|p| p.ventana.as_deref().is_some_and(|v| v.contains('#')))
+                        .collect();
+                    if cli && lineas.is_empty() {
+                        self.espera_repisas -= dt;
+                        (self.vx, self.vy) = (0.0, 0.0);
+                        return self.look();
+                    }
+                    self.espera_repisas = 0.0;
+                    let cerca = lineas
+                        .into_iter()
+                        .filter(|p| {
+                            (p.y - self.y).abs() <= ACOMODA
+                                && self.x >= p.x0 - TOLERA_X
+                                && self.x <= p.x1 + TOLERA_X
+                        })
+                        .min_by(|a, b| (a.y - self.y).abs().total_cmp(&(b.y - self.y).abs()));
+                    if let Some(p) = cerca {
+                        self.x = self.x.clamp(p.x0, p.x1);
+                        self.y = p.y;
+                        self.sobre = p.ventana.clone();
+                        self.puesto_en = p.ventana.clone();
+                        (self.vx, self.vy) = (0.0, 0.0);
+                        self.aterrizo = 0.07;
+                        self.hace = Hace::Para;
+                        self.falta = self.entre(1.0, 2.5);
+                        return self.look();
+                    }
+                }
                 let antes = self.y;
                 self.vy += GRAVEDAD * dt;
                 self.y += self.vy * dt;
@@ -692,7 +774,13 @@ impl Bicho {
                     let aterriza = plats
                         .iter()
                         .filter(|p| {
-                            antes <= p.y + 0.5 && self.y >= p.y && self.x >= p.x0 && self.x <= p.x1
+                            // donde cabe, o su línea (donde tú lo pusiste)
+                            let suya = self.puesto_en.is_some() && p.ventana == self.puesto_en;
+                            (p.cabe || suya)
+                                && antes <= p.y + 0.5
+                                && self.y >= p.y
+                                && self.x >= p.x0
+                                && self.x <= p.x1
                         })
                         .min_by(|a, b| a.y.total_cmp(&b.y));
                     let piso = &plats[0];
@@ -752,11 +840,15 @@ impl Bicho {
                 // en la orilla: a otra ventana si le alcanza; si no, casi
                 // siempre se da la vuelta
                 let juega = matches!(self.hace, Hace::Juega { .. });
-                if !juega && let Some((x0, x1, y)) = self.la_mas_cerca(plats, self.der) {
+                let suya = self.en_su_linea();
+                if !juega
+                    && !suya
+                    && let Some((x0, x1, y)) = self.la_mas_cerca(plats, self.der)
+                {
                     self.brinca_a(x0, x1, y);
                     return;
                 }
-                if self.sobre.is_none() || self.azar() >= AVIENTA {
+                if self.sobre.is_none() || suya || self.azar() >= AVIENTA {
                     self.der = !self.der;
                 }
             }
@@ -773,11 +865,15 @@ impl Bicho {
             // en la orilla: ¿hay a dónde brincar para allá? (jugando no: se
             // acabaría el juego)
             let juega = matches!(self.hace, Hace::Juega { .. });
-            if !juega && let Some((x0, x1, y)) = self.la_mas_cerca(plats, self.der) {
+            let suya = self.en_su_linea();
+            if !juega
+                && !suya
+                && let Some((x0, x1, y)) = self.la_mas_cerca(plats, self.der)
+            {
                 self.brinca_a(x0, x1, y);
                 return;
             }
-            if self.sobre.is_some() && self.azar() < AVIENTA {
+            if self.sobre.is_some() && !suya && self.azar() < AVIENTA {
                 // se avienta
                 self.vx = if self.der { paso } else { -paso };
                 self.vy = -120.0;
@@ -806,6 +902,7 @@ impl Bicho {
         self.dentro = None;
         self.de_casa = false;
         self.regresa_a = None;
+        self.puesto_en = None;
         self.oculto = false;
         self.hace = Hace::Agarrado;
         self.sobre = None;
@@ -829,7 +926,9 @@ impl Bicho {
                     Some(false) => dx < 0.0,
                     None => true,
                 };
-                otra && lado
+                p.cabe
+                    && otra
+                    && lado
                     && (-ALCANCE_ARRIBA..=ALCANCE_ABAJO).contains(&dy)
                     && dx.abs() <= ALCANCE_LADO
             })
@@ -847,6 +946,11 @@ impl Bicho {
                 d(a).total_cmp(&d(b))
             })
             .map(|p| (p.x0, p.x1, p.y))
+    }
+
+    /// ¿Anda en la línea donde tú lo pusiste? (ahí se queda)
+    fn en_su_linea(&self) -> bool {
+        self.puesto_en.is_some() && self.puesto_en == self.sobre
     }
 
     /// Brinca a una plataforma: cae tantito adentro de ella, no en la orilla.
@@ -939,6 +1043,12 @@ impl Bicho {
         self.regresa_a = None;
         self.corazon = CORAZON_DURA;
         self.muestra_casa = MUESTRA_CASA;
+    }
+
+    /// Lo metiste a una terminal: que espere a ver las letras antes de caer
+    /// (la foto tarda) y se acomode en la línea que le quede más cerca.
+    pub fn espera_letras(&mut self) {
+        self.espera_repisas = ESPERA_REPISAS;
     }
 
     /// Ya te avisó lo que tenía que avisarte: si salió de su casa, regresa a
@@ -1852,6 +1962,70 @@ mod tests {
             "PARKOUR: {visitaron_b}/10 fueron a la otra ventana; {:.0}% del tiempo en el piso",
             piso * 100.0
         );
+    }
+
+    #[test]
+    fn soltado_en_una_terminal_se_acomoda_en_la_linea_y_se_queda() {
+        let v = Ventana {
+            id: "a".into(),
+            x: 100.0,
+            y: 100.0,
+            w: 800.0,
+            h: 800.0,
+        };
+        let mut m = mundo(vec![v]);
+        m.todas = vec!["a".into()];
+        m.clis = vec!["a".into()];
+        let linea = |y: f32, x1: f32| Repisa {
+            y,
+            x0: 0.0,
+            x1,
+            cabe: false,
+        };
+        let mut b = Bicho::new(3.0, 48.0, 60.0, 30);
+        // lo sueltas con las patas 12 px abajo de una línea (la de y=240
+        // dentro de la ventana: el lienzo parado ahí queda en y=340)
+        (b.x, b.y) = (300.0, 352.0);
+        b.agarra();
+        b.avienta(0.0, 0.0);
+        b.espera_letras();
+        b.entra("a".into());
+        // la foto aún no llega: flota
+        for _ in 0..9 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        assert_eq!(b.y, 352.0, "no esperó a ver las letras");
+        // llegan las letras: se acomoda en la línea
+        b.repisas = vec![linea(240.0, 700.0)];
+        b.tick(0.033, &m, 1920.0, 1200.0, None);
+        assert_eq!((b.y, b.sobre.as_deref()), (340.0, Some("a#240")));
+        // el cursor parpadea: la línea queda 3 px más abajo y más corta; se queda
+        b.repisas = vec![linea(243.0, 650.0)];
+        for _ in 0..5 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+        }
+        assert_eq!((b.y, b.sobre.as_deref()), (343.0, Some("a#243")));
+        // y ahí se queda (es su línea): camina, se sienta, duerme, pero no
+        // brinca a otra ni se avienta, aunque haya otras líneas cerca
+        b.repisas = vec![
+            linea(243.0, 650.0),
+            Repisa {
+                y: 140.0,
+                x0: 0.0,
+                x1: 700.0,
+                cabe: true,
+            },
+        ];
+        for _ in 0..3000 {
+            b.tick(0.033, &m, 1920.0, 1200.0, None);
+            if b.hace != Hace::Vuela {
+                assert_eq!(b.sobre.as_deref(), Some("a#243"), "se fue de su línea");
+            }
+        }
+        // se borró la línea (clear): ahora sí se cae
+        b.repisas.clear();
+        b.tick(0.033, &m, 1920.0, 1200.0, None);
+        assert_eq!(b.hace, Hace::Vuela);
     }
 
     #[test]
