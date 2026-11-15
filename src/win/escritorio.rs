@@ -1,10 +1,11 @@
-//! Lo que hay en el escritorio de Windows: la pantalla principal (dónde
-//! empieza, cuánto escala, cuánto ocupa la barra de tareas), las ventanas
-//! (EnumWindows, de arriba para abajo) y el cursor.
+//! Lo que hay en el escritorio de Windows: las pantallas (dónde empieza
+//! cada una, cuánto escala, cuánto ocupa la barra de tareas), las ventanas
+//! (EnumWindows, de arriba para abajo), el cursor y lo que se ve detrás de
+//! un animalito (para el contraste).
 //!
-//! Todo se pasa a coordenadas lógicas de la pantalla, como en Linux: el
-//! proceso es "per monitor v2" (ve pixeles de verdad) y aquí se divide entre
-//! la escala.
+//! Cada animalito vive en una pantalla y ve todo en coordenadas lógicas de
+//! ella, como en Linux: el proceso es "per monitor v2" (ve pixeles de verdad)
+//! y aquí se divide entre la escala de esa pantalla.
 //!
 //! En Hyprland las ventanas no se enciman; aquí sí. Si otra tapa la orilla de
 //! arriba de una ventana, a esa nomás le queda el tramo más largo que sigue
@@ -17,23 +18,22 @@ use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleDC, CreateDIBSection,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors, GetDC, GetMonitorInfoW, HDC,
+    HMONITOR, MONITORINFO, ReleaseDC, SRCCOPY, SelectObject,
 };
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows_sys::Win32::UI::Shell::{
-    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
-};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextW, IsIconic, IsWindowVisible, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT,
+    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowTextW, IsIconic, IsWindowVisible, MONITORINFOF_PRIMARY,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 
-/// La pantalla donde viven (la principal).
+/// Una pantalla.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Pantalla {
-    /// dónde empieza, en pixeles de verdad
-    pub(crate) origen: (i32, i32),
+    /// dónde está, en pixeles de verdad (izq, arriba, der, abajo)
+    pub(crate) rect: (i32, i32, i32, i32),
     /// cuánto mide, en lógicos
     pub(crate) tam: (f32, f32),
     /// pixeles de verdad por pixel lógico (1.25 al 125 %)
@@ -43,31 +43,99 @@ pub(crate) struct Pantalla {
     pub(crate) arriba: f32,
 }
 
-pub(crate) fn pantalla() -> Pantalla {
-    unsafe {
-        let mon = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
-        let mut info: MONITORINFO = std::mem::zeroed();
-        info.cbSize = size_of::<MONITORINFO>() as u32;
-        GetMonitorInfoW(mon, &mut info);
-        let (mut dx, mut dy) = (96u32, 96u32);
-        GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
-        let escala = (dx.max(96) as f32 / 96.0).max(1.0);
-        let (m, t) = (info.rcMonitor, info.rcWork);
-        Pantalla {
-            origen: (m.left, m.top),
-            tam: (
-                (m.right - m.left) as f32 / escala,
-                (m.bottom - m.top) as f32 / escala,
-            ),
-            escala,
-            abajo: (m.bottom - t.bottom).max(0) as f32 / escala,
-            arriba: (t.top - m.top).max(0) as f32 / escala,
-        }
+impl Pantalla {
+    /// Un punto de la pantalla (pixeles de verdad) → lógicos de esta.
+    pub(crate) fn a_logico(&self, (x, y): (i32, i32)) -> (f32, f32) {
+        (
+            (x - self.rect.0) as f32 / self.escala,
+            (y - self.rect.1) as f32 / self.escala,
+        )
+    }
+
+    fn tiene(&self, (x, y): (i32, i32)) -> bool {
+        x >= self.rect.0 && x < self.rect.2 && y >= self.rect.1 && y < self.rect.3
     }
 }
 
-/// Una ventana entera, como se ve (en lógicos), para saber cuál está debajo
-/// de un punto.
+unsafe extern "system" fn junta_monitor(m: HMONITOR, _: HDC, _: *mut RECT, lp: LPARAM) -> i32 {
+    let v = unsafe { &mut *(lp as *mut Vec<HMONITOR>) };
+    v.push(m);
+    1
+}
+
+/// Todas las pantallas; la principal primero, luego de izquierda a derecha.
+pub(crate) fn pantallas() -> Vec<Pantalla> {
+    let mut mons: Vec<HMONITOR> = Vec::new();
+    unsafe {
+        EnumDisplayMonitors(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            Some(junta_monitor),
+            &mut mons as *mut Vec<HMONITOR> as LPARAM,
+        );
+    }
+    let mut v: Vec<(bool, Pantalla)> = mons
+        .into_iter()
+        .filter_map(|mon| unsafe {
+            let mut info: MONITORINFO = std::mem::zeroed();
+            info.cbSize = size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(mon, &mut info) == 0 {
+                return None;
+            }
+            let (mut dx, mut dy) = (96u32, 96u32);
+            GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
+            let escala = (dx.max(96) as f32 / 96.0).max(1.0);
+            let (m, t) = (info.rcMonitor, info.rcWork);
+            Some((
+                info.dwFlags & MONITORINFOF_PRIMARY != 0,
+                Pantalla {
+                    rect: (m.left, m.top, m.right, m.bottom),
+                    tam: (
+                        (m.right - m.left) as f32 / escala,
+                        (m.bottom - m.top) as f32 / escala,
+                    ),
+                    escala,
+                    abajo: (m.bottom - t.bottom).max(0) as f32 / escala,
+                    arriba: (t.top - m.top).max(0) as f32 / escala,
+                },
+            ))
+        })
+        .collect();
+    v.sort_by_key(|(principal, p)| (!principal, p.rect.0, p.rect.1));
+    v.into_iter().map(|(_, p)| p).collect()
+}
+
+/// En qué pantalla está ese punto (pixeles de verdad).
+pub(crate) fn pantalla_de(ps: &[Pantalla], punto: (i32, i32)) -> Option<usize> {
+    ps.iter().position(|p| p.tiene(punto))
+}
+
+/// La pantalla pegada a la orilla derecha (o izquierda) de `i`, a la altura
+/// `y` (pixeles de verdad); si a esa altura no hay, cualquiera pegada.
+pub(crate) fn vecina(ps: &[Pantalla], i: usize, der: bool, y: i32) -> Option<usize> {
+    let p = ps.get(i)?;
+    let pegadas: Vec<usize> = (0..ps.len())
+        .filter(|&j| j != i)
+        .filter(|&j| {
+            let q = &ps[j];
+            let junto = if der {
+                (q.rect.0 - p.rect.2).abs() <= 2
+            } else {
+                (q.rect.2 - p.rect.0).abs() <= 2
+            };
+            // que se toquen de alto
+            junto && q.rect.1 < p.rect.3 && q.rect.3 > p.rect.1
+        })
+        .collect();
+    pegadas
+        .iter()
+        .copied()
+        .find(|&j| y >= ps[j].rect.1 && y < ps[j].rect.3)
+        .or(pegadas.first().copied())
+}
+
+/// Una ventana entera, como se ve (en lógicos de una pantalla), para saber
+/// cuál está debajo de un punto.
 #[derive(Clone, Debug)]
 pub(crate) struct Caja {
     pub(crate) id: String,
@@ -203,91 +271,144 @@ fn libres(x0: f32, x1: f32, y0: f32, y1: f32, encima: &[Caja]) -> Vec<(f32, f32)
     tramos
 }
 
-/// El mundo de ahorita. `alto` es lo que mide un animalito parado (lógicos):
-/// la franja arriba de cada ventana que tiene que estar libre para pararse.
-/// También regresa todas las ventanas que se ven, enteras y de arriba para
-/// abajo.
-pub(crate) fn mundo(p: &Pantalla, alto: f32, ancho: f32) -> (Mundo, Vec<Caja>) {
-    let (ox, oy) = p.origen;
-    let mut m = Mundo {
-        abajo: p.abajo,
-        arriba: p.arriba,
-        borde: 0.0,
-        ..Mundo::default()
-    };
-    let mut cajas: Vec<Caja> = Vec::new();
+/// El mundo de ahorita en cada pantalla. `alto` es lo que mide un animalito
+/// parado (lógicos): la franja arriba de cada ventana que tiene que estar
+/// libre para pararse. Con cada mundo van todas las ventanas que se ven en
+/// esa pantalla, enteras y de arriba para abajo.
+pub(crate) fn mundos(ps: &[Pantalla], alto: f32, ancho: f32) -> Vec<(Mundo, Vec<Caja>)> {
+    // una sola pasada por las ventanas
+    let mut todas_ids = Vec::new();
+    let mut visibles: Vec<(String, RECT)> = Vec::new();
     for hwnd in todas() {
         if !es_de_alguien(hwnd) {
             continue;
         }
         let id = id(hwnd);
         // minimizada o en otro escritorio: existe, pero no se ve
-        m.todas.push(id.clone());
+        todas_ids.push(id.clone());
         if unsafe { IsIconic(hwnd) } != 0 || encubierta(hwnd) {
             continue;
         }
-        let r = rect(hwnd);
-        let c = Caja {
-            id,
-            x: (r.left - ox) as f32 / p.escala,
-            y: (r.top - oy) as f32 / p.escala,
-            w: (r.right - r.left) as f32 / p.escala,
-            h: (r.bottom - r.top) as f32 / p.escala,
-        };
-        if c.w < 1.0 || c.h < 1.0 {
-            continue;
-        }
-        // en otra pantalla
-        if c.x >= p.tam.0 || c.y >= p.tam.1 || c.x + c.w <= 0.0 || c.y + c.h <= 0.0 {
-            continue;
-        }
-        // en pantalla completa no hay de dónde agarrarse (y tapa todo lo de
-        // abajo)
-        let completa = c.x <= 0.0 && c.y <= 0.0 && c.x + c.w >= p.tam.0 && c.y + c.h >= p.tam.1;
-        if !completa {
-            // lo más largo que queda libre de su orilla de arriba
-            let mejor = libres(c.x, c.x + c.w, c.y - alto, c.y, &cajas)
-                .into_iter()
-                .max_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0)));
-            if let Some((x0, x1)) = mejor.filter(|(a, b)| b - a >= ancho) {
-                m.ventanas.push(Ventana {
-                    id: c.id.clone(),
-                    x: x0,
-                    y: c.y,
-                    w: x1 - x0,
-                    h: c.h,
-                });
-            }
-        }
-        cajas.push(c);
+        visibles.push((id, rect(hwnd)));
     }
-    (m, cajas)
+    ps.iter()
+        .map(|p| {
+            let mut m = Mundo {
+                abajo: p.abajo,
+                arriba: p.arriba,
+                borde: 0.0,
+                origen: (p.rect.0 as f32, p.rect.1 as f32),
+                todas: todas_ids.clone(),
+                ..Mundo::default()
+            };
+            let mut cajas: Vec<Caja> = Vec::new();
+            for (id, r) in &visibles {
+                let (x, y) = p.a_logico((r.left, r.top));
+                let c = Caja {
+                    id: id.clone(),
+                    x,
+                    y,
+                    w: (r.right - r.left) as f32 / p.escala,
+                    h: (r.bottom - r.top) as f32 / p.escala,
+                };
+                if c.w < 1.0 || c.h < 1.0 {
+                    continue;
+                }
+                // en otra pantalla
+                if c.x >= p.tam.0 || c.y >= p.tam.1 || c.x + c.w <= 0.0 || c.y + c.h <= 0.0 {
+                    continue;
+                }
+                // en pantalla completa no hay de dónde agarrarse
+                let completa =
+                    c.x <= 0.0 && c.y <= 0.0 && c.x + c.w >= p.tam.0 && c.y + c.h >= p.tam.1;
+                if !completa {
+                    // lo más largo que queda libre de su orilla de arriba
+                    let mejor = libres(c.x, c.x + c.w, c.y - alto, c.y, &cajas)
+                        .into_iter()
+                        .max_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0)));
+                    if let Some((x0, x1)) = mejor.filter(|(a, b)| b - a >= ancho) {
+                        m.ventanas.push(Ventana {
+                            id: c.id.clone(),
+                            x: x0,
+                            y: c.y,
+                            w: x1 - x0,
+                            h: c.h,
+                        });
+                    }
+                }
+                cajas.push(c);
+            }
+            (m, cajas)
+        })
+        .collect()
 }
 
-/// La ventana que se ve en (x, y) (lógicos).
+/// La ventana que se ve en (x, y) (lógicos de la pantalla de esas cajas).
 pub(crate) fn ventana_en(cajas: &[Caja], x: f32, y: f32) -> Option<String> {
     cajas.iter().find(|c| c.tiene(x, y)).map(|c| c.id.clone())
 }
 
-pub(crate) fn cursor(p: &Pantalla) -> Option<(f32, f32)> {
+/// El cursor, en pixeles de verdad.
+pub(crate) fn cursor() -> Option<(i32, i32)> {
     let mut pt = POINT { x: 0, y: 0 };
-    (unsafe { GetCursorPos(&mut pt) } != 0).then(|| {
-        (
-            (pt.x - p.origen.0) as f32 / p.escala,
-            (pt.y - p.origen.1) as f32 / p.escala,
-        )
+    (unsafe { GetCursorPos(&mut pt) } != 0).then_some((pt.x, pt.y))
+}
+
+/// ¿En qué pantalla hay algo en pantalla completa (un juego, un video, una
+/// presentación)? Ahí mejor no estorbar.
+pub(crate) fn completa_en(ps: &[Pantalla]) -> Option<usize> {
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.is_null() || NO_CUENTAN.contains(&clase(fg).as_str()) {
+        return None;
+    }
+    let mut r: RECT = unsafe { std::mem::zeroed() };
+    unsafe { GetWindowRect(fg, &mut r) };
+    ps.iter().position(|p| {
+        r.left <= p.rect.0 && r.top <= p.rect.1 && r.right >= p.rect.2 && r.bottom >= p.rect.3
     })
 }
 
-/// ¿Hay algo en pantalla completa (un juego, un video, una presentación)?
-/// Entonces mejor no estorbar.
-pub(crate) fn pantalla_completa() -> bool {
-    let mut q = 0;
-    unsafe { SHQueryUserNotificationState(&mut q) };
-    matches!(
-        q,
-        QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE
-    )
+/// Qué tan clarito es lo que se ve en ese rectángulo de la pantalla (pixeles
+/// de verdad), sin contar a los animalitos (sus ventanas en capas no salen
+/// en la foto si no se pide CAPTUREBLT). 0 negro, 1 blanco.
+pub(crate) fn luz_detras(x: i32, y: i32, w: i32, h: i32) -> Option<f32> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    unsafe {
+        let pantalla = GetDC(std::ptr::null_mut());
+        let dc = CreateCompatibleDC(pantalla);
+        let mut bi: BITMAPINFO = std::mem::zeroed();
+        bi.bmiHeader = BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            ..std::mem::zeroed()
+        };
+        let mut bits = std::ptr::null_mut();
+        let bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        let mut r = None;
+        if !bmp.is_null() && !bits.is_null() {
+            let viejo = SelectObject(dc, bmp);
+            if BitBlt(dc, 0, 0, w, h, pantalla, x, y, SRCCOPY) != 0 {
+                let px = std::slice::from_raw_parts(bits as *const u32, (w * h) as usize);
+                // de cada cuarto pixel basta
+                let (suma, n) = px
+                    .iter()
+                    .step_by(4)
+                    .fold((0.0, 0u32), |(s, n), &c| (s + crate::arte::luz(c), n + 1));
+                r = (n > 0).then(|| suma / n as f32);
+            }
+            SelectObject(dc, viejo);
+            DeleteObject(bmp);
+        }
+        DeleteDC(dc);
+        ReleaseDC(std::ptr::null_mut(), pantalla);
+        r
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +425,16 @@ mod tests {
         }
     }
 
+    fn pantalla(rect: (i32, i32, i32, i32)) -> Pantalla {
+        Pantalla {
+            rect,
+            tam: ((rect.2 - rect.0) as f32, (rect.3 - rect.1) as f32),
+            escala: 1.0,
+            abajo: 0.0,
+            arriba: 0.0,
+        }
+    }
+
     #[test]
     fn lo_que_tapa_otra_ventana_no_cuenta() {
         let encima = [caja(100.0, 0.0, 50.0, 500.0)];
@@ -316,5 +447,18 @@ mod tests {
             libres(0.0, 300.0, 600.0, 650.0, &encima),
             vec![(0.0, 300.0)]
         );
+    }
+
+    #[test]
+    fn las_pantallas_de_al_lado() {
+        // laptop en medio, una a la derecha más alta, nada a la izquierda
+        let ps = [
+            pantalla((0, 0, 1920, 1080)),
+            pantalla((1920, -200, 4480, 1240)),
+        ];
+        assert_eq!(vecina(&ps, 0, true, 500), Some(1));
+        assert_eq!(vecina(&ps, 0, false, 500), None);
+        assert_eq!(vecina(&ps, 1, false, 1200), Some(0));
+        assert_eq!(pantalla_de(&ps, (2000, -100)), Some(1));
     }
 }

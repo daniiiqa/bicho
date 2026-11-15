@@ -1,9 +1,10 @@
 //! El ícono de la bandeja (junto al reloj) y su menú: qué animalitos andan,
-//! de qué tamaño, si trepan, si arrancan con Windows, y guardarlos. Hace lo
-//! que en Linux hace `bicho menu`; lo que cambies se guarda en
-//! %APPDATA%\bicho\config.json.
+//! de qué tamaño, si trepan, si bailan, el contraste, si son caga palos, si
+//! arrancan con Windows, actualizarse y guardarlos. Hace lo que en Linux hace
+//! `bicho menu`; lo que cambies se guarda en %APPDATA%\bicho\config.json.
+//! También los avisos (la notificación del ícono).
 
-use super::{App, w};
+use super::{App, actualiza, w};
 use crate::arte;
 use serde_json::{Value, json};
 use windows_sys::Win32::Foundation::HWND;
@@ -16,11 +17,12 @@ use windows_sys::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
 };
 use windows_sys::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateIconIndirect, CreatePopupMenu, HICON, HMENU, ICONINFO, MF_CHECKED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, SM_CXSMICON, WM_APP,
+    AppendMenuW, CreateIconIndirect, CreatePopupMenu, HICON, HMENU, ICONINFO, MF_CHECKED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, SM_CXSMICON, WM_APP,
 };
 
 /// Lo que manda el ícono cuando le das clic.
@@ -33,6 +35,10 @@ const TAMANO: usize = 300;
 pub(crate) const TREPA: usize = 400;
 pub(crate) const INICIO: usize = 401;
 pub(crate) const GUARDA: usize = 402;
+const BAILA: usize = 403;
+const CONTRASTE: usize = 404;
+const TRAVIESO: usize = 405;
+const ACTUALIZA: usize = 406;
 const TAMANOS: [u32; 5] = [2, 3, 4, 5, 6];
 
 /// ¿Windows está en español?
@@ -146,6 +152,24 @@ pub(crate) fn pon(control: HWND, icono: HICON) {
     unsafe { Shell_NotifyIconW(NIM_ADD, &d) };
 }
 
+/// Un aviso del ícono (en Windows 11 sale como notificación).
+pub(crate) fn avisa(control: HWND, titulo: &str, texto: &str) {
+    let mut d = datos(control, std::ptr::null_mut());
+    d.uFlags = NIF_INFO;
+    d.dwInfoFlags = NIIF_INFO;
+    for (i, c) in titulo
+        .encode_utf16()
+        .take(d.szInfoTitle.len() - 1)
+        .enumerate()
+    {
+        d.szInfoTitle[i] = c;
+    }
+    for (i, c) in texto.encode_utf16().take(d.szInfo.len() - 1).enumerate() {
+        d.szInfo[i] = c;
+    }
+    unsafe { Shell_NotifyIconW(NIM_MODIFY, &d) };
+}
+
 pub(crate) fn quita(control: HWND) {
     let d = datos(control, std::ptr::null_mut());
     unsafe { Shell_NotifyIconW(NIM_DELETE, &d) };
@@ -234,10 +258,45 @@ impl App {
             );
             agrega(
                 m,
+                MF_STRING | si(self.cfg.baila),
+                BAILA,
+                t("Bailan con música", "Dance to music"),
+            );
+            agrega(
+                m,
+                MF_STRING | si(self.cfg.contraste),
+                CONTRASTE,
+                t("Contraste (que no se pierdan)", "Contrast (don't get lost)"),
+            );
+            agrega(
+                m,
+                MF_STRING | si(self.cfg.travieso),
+                TRAVIESO,
+                t("Caga palos", "Troublemakers"),
+            );
+            agrega(
+                m,
                 MF_STRING | si(al_iniciar()),
                 INICIO,
                 t("Arrancar con Windows", "Start with Windows"),
             );
+            agrega(m, MF_SEPARATOR, 0, "");
+            let actualizar = match &self.nueva {
+                Some(c) => format!(
+                    "{} ({})",
+                    t("Actualizar a la nueva", "Update to the new one"),
+                    actualiza::corto(c)
+                ),
+                None => t("Buscar actualización", "Check for updates").to_string(),
+            };
+            let ocupado = if self.actualizando { MF_GRAYED } else { 0 };
+            agrega(m, MF_STRING | ocupado, ACTUALIZA, &actualizar);
+            let version = format!(
+                "bicho {}",
+                actualiza::COMMIT
+                    .map_or(t("(compilado a mano)", "(local build)"), actualiza::corto)
+            );
+            agrega(m, MF_STRING | MF_GRAYED, 0, &version);
             agrega(m, MF_SEPARATOR, 0, "");
             agrega(m, MF_STRING, GUARDA, t("Guardarlos", "Put them away"));
             m
@@ -249,7 +308,37 @@ impl App {
         let todas = arte::todas();
         let mut pets = self.cfg.pets.clone();
         let (mut escala, mut trepa) = (self.cfg.escala, self.cfg.trepa);
+        // lo que no necesita volver a crearlos
+        let solo_guarda = |a: &mut App| {
+            guarda_config(&a.cfg);
+            for p in &mut a.mascotas {
+                p.bicho.travieso = a.cfg.travieso;
+            }
+        };
         match cmd {
+            BAILA => {
+                self.cfg.baila = !self.cfg.baila;
+                return solo_guarda(self);
+            }
+            CONTRASTE => {
+                self.cfg.contraste = !self.cfg.contraste;
+                // que lo vea ya
+                self.cada_contraste = 0.0;
+                return solo_guarda(self);
+            }
+            TRAVIESO => {
+                self.cfg.travieso = !self.cfg.travieso;
+                return solo_guarda(self);
+            }
+            ACTUALIZA => {
+                avisa(
+                    self.control,
+                    "bicho",
+                    t("Buscando versión nueva…", "Looking for a new version…"),
+                );
+                self.revisa(true);
+                return;
+            }
             c if (ESPECIE..ESPECIE + todas.len()).contains(&c) => {
                 let nombre = todas[c - ESPECIE].nombre.to_string();
                 if pets.contains(&nombre) {
@@ -276,23 +365,26 @@ impl App {
             }
             _ => return,
         }
-        guarda_config(&pets, escala, trepa);
-        self.cfg = crate::config();
+        (self.cfg.pets, self.cfg.escala, self.cfg.trepa) = (pets, escala, trepa);
+        guarda_config(&self.cfg);
         self.recrea();
     }
 }
 
 /// Escribe la config (lo que no se toca aquí, se queda como estaba).
-fn guarda_config(pets: &[String], escala: u32, trepa: bool) {
+fn guarda_config(cfg: &crate::Config) {
     let archivo = crate::config_dir().join("config.json");
     let mut v: Value = std::fs::read(&archivo)
         .ok()
         .and_then(|d| serde_json::from_slice(&d).ok())
         .filter(Value::is_object)
         .unwrap_or_else(|| json!({}));
-    v["pets"] = json!(pets);
-    v["scale"] = json!(escala);
-    v["climb"] = json!(trepa);
+    v["pets"] = json!(cfg.pets);
+    v["scale"] = json!(cfg.escala);
+    v["climb"] = json!(cfg.trepa);
+    v["dance"] = json!(cfg.baila);
+    v["contrast"] = json!(cfg.contraste);
+    v["mischief"] = json!(cfg.travieso);
     let _ = std::fs::create_dir_all(crate::config_dir());
     if let Ok(s) = serde_json::to_string_pretty(&v) {
         let _ = std::fs::write(&archivo, s + "\n");

@@ -183,31 +183,53 @@ quien.
 ## En Windows
 
 También andan en Windows 10 y 11: bájate `bicho-x86_64-windows.exe` de la
-[release edge](../../releases/tag/edge) y dale doble clic. No se instala
-nada. La primera vez Windows avisa que no conoce al programa (no está
-firmado): «Más información» → «Ejecutar de todas formas».
+[release edge](../../releases/tag/edge), ponlo en una carpeta donde se vaya
+a quedar y dale doble clic. No se instala nada. La primera vez Windows avisa
+que no conoce al programa (no está firmado): «Más información» →
+«Ejecutar de todas formas».
 
 Hacen lo mismo que en Linux: caminan por arriba de la barra de tareas, trepan
 y se pasean por las ventanas (solo por la orilla que se ve, si otra la
-tapa), se duermen, juegan a la correteada y se saludan. También los agarras,
-los avientas y les das cariño con un clic. Para meterlos a una ventana,
-suéltalos con **Ctrl** apretado: ahí viven, y si otra ventana la tapa, los
-tapa también. Si algo está en pantalla completa (un juego, un video), se
-esconden.
+tapa), se duermen, juegan a la correteada, se saludan y bailan si suena
+música (lo que salga en los controles de medios de Windows: Spotify,
+YouTube…). Los agarras, los avientas y les das cariño con un clic. Para
+meterlos a una ventana, suéltalos con **Ctrl** apretado: ahí viven, y si
+otra ventana la tapa, los tapa también. Si algo está en pantalla completa
+(un juego, un video), en esa pantalla se esconden.
+
+Con varias pantallas se pasan de una a otra por las orillas que se tocan:
+paseando, persiguiendo al cursor, o si los avientas para allá (o los llevas
+arrastrando). Con **contraste**, si se confunden con lo que tienen atrás (uno
+oscuro en una ventana oscura), les sale un halo claro u oscuro.
+
+**Caga palos** (viene prendido en Windows): persiguen más al cursor, brincan
+con un «!» para llamarte la atención, a veces se te escapan si les llegas
+rápido con el mouse, si uno te alcanza persiguiéndote se roba el cursor un
+ratito (jala fuerte y lo suelta), y de vez en cuando uno le da de pisotones
+a la ventana donde anda parado (se sacude, no se mueve de lugar). Nunca
+mientras traes apretado un botón del mouse, ni con ventanas maximizadas.
 
 El menú es el ícono junto al reloj: qué animalitos andan (y uno más), el
-tamaño, si trepan, si arrancan con Windows, y guardarlos. Habla español o
-inglés, según Windows. Lo que cambies se guarda en
-`%APPDATA%\bicho\config.json`. Ahí también van los disfraces
+tamaño, si trepan, si bailan, el contraste, caga palos, si arrancan con
+Windows, actualizar y guardarlos. Habla español o inglés, según Windows. Lo
+que cambies se guarda en `%APPDATA%\bicho\config.json` (`"dance"`,
+`"contrast"`, `"mischief"`, como los demás). Ahí también van los disfraces
 (`<especie>.txt`) y, si quieres otros colores, un `colors.json` con las
 mismas claves que el de wallust. Si algo truena, queda en
 `%LOCALAPPDATA%\bicho\bicho.log`.
 
+**Actualizar**: cada tanto revisa solo y, si hay versión nueva, avisa con
+una notificación; en el menú, «Actualizar» la baja (revisa su sha256), se
+cambia y vuelve a soltar a los animalitos. O `bicho actualiza` en una
+terminal.
+
 Desde una terminal: `bicho off`, `bicho toggle`, `bicho michi baba`,
-`bicho ver`.
+`bicho ver`, `bicho actualiza`.
 
 Allá no hay (todavía): repisas en las letras de las terminales, claudio con
-Claude Code, las reacciones a discada ni el baile con música.
+Claude Code ni las reacciones a discada. En Linux, caga palos se prende con
+`"mischief": true` (persiguen más y brincan para llamarte; las travesuras
+con el cursor y las ventanas son nomás de Windows).
 
 ## Por dentro
 

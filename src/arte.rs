@@ -670,6 +670,43 @@ pub fn pinta(g: &Grid, colores: &[u32; COLORES], px: usize, buf: &mut [u8]) {
     }
 }
 
+/// Un halo alrededor del dibujo ya pintado (`buf`, ARGB de `w × h`): lo
+/// transparente a `grosor` pixeles o menos del dibujo se pinta de `argb`.
+/// Para que no se pierda en una ventana del mismo color que él.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn halo(buf: &mut [u8], w: usize, h: usize, grosor: usize, argb: u32) {
+    let mascara: Vec<bool> = buf.as_chunks::<4>().0.iter().map(|p| p[3] != 0).collect();
+    let lleno = |i: usize| mascara[i];
+    // lo lleno, engordado de lado y luego para arriba y abajo
+    let mut horiz = vec![false; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (a, b) = (x.saturating_sub(grosor), (x + grosor).min(w - 1));
+            horiz[y * w + x] = (a..=b).any(|xx| lleno(y * w + xx));
+        }
+    }
+    let bytes = argb.to_le_bytes();
+    for y in 0..h {
+        for x in 0..w {
+            let i = y * w + x;
+            if lleno(i) {
+                continue;
+            }
+            let (a, b) = (y.saturating_sub(grosor), (y + grosor).min(h - 1));
+            if (a..=b).any(|yy| horiz[yy * w + x]) {
+                buf[i * 4..i * 4 + 4].copy_from_slice(&bytes);
+            }
+        }
+    }
+}
+
+/// Qué tan clarito es un color (0 negro, 1 blanco).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn luz(rgb: u32) -> f32 {
+    let c = |sh: u32| ((rgb >> sh) & 0xff) as f32 / 255.0;
+    0.2126 * c(16) + 0.7152 * c(8) + 0.0722 * c(0)
+}
+
 /// Para `bicho ver`: la cuadrícula en la terminal, con medios bloques.
 pub fn terminal(g: &Grid, colores: &[u32; COLORES]) -> String {
     let mut s = String::new();
@@ -705,6 +742,27 @@ pub fn terminal(g: &Grid, colores: &[u32; COLORES]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_halo_rodea_al_dibujo_sin_taparlo() {
+        // un pixel lleno en medio de 5×5, halo de 1
+        let (w, h) = (5, 5);
+        let mut buf = vec![0u8; w * h * 4];
+        buf[(2 * w + 2) * 4..(2 * w + 2) * 4 + 4].copy_from_slice(&0xff11_2233u32.to_le_bytes());
+        halo(&mut buf, w, h, 1, 0xc0ff_ffff);
+        let px = |x: usize, y: usize| {
+            u32::from_le_bytes(
+                buf[(y * w + x) * 4..(y * w + x) * 4 + 4]
+                    .try_into()
+                    .unwrap(),
+            )
+        };
+        assert_eq!(px(2, 2), 0xff11_2233);
+        assert_eq!(px(1, 1), 0xc0ff_ffff);
+        assert_eq!(px(3, 2), 0xc0ff_ffff);
+        assert_eq!(px(0, 0), 0);
+        assert_eq!(px(4, 2), 0);
+    }
 
     #[test]
     fn dibujos_de_16() {

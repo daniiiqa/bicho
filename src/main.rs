@@ -445,6 +445,12 @@ struct Config {
     baila: bool,
     velocidad: f32,
     trepa: bool,
+    /// caga palos ("mischief"): persiguen más al cursor, brincan para
+    /// llamarte y en Windows hacen travesuras. Allá viene prendido
+    travieso: bool,
+    /// un halo cuando se confunden con lo de atrás ("contrast"; Windows)
+    #[cfg_attr(not(windows), allow(dead_code))]
+    contraste: bool,
 }
 
 fn config() -> Config {
@@ -470,6 +476,8 @@ fn config() -> Config {
         escala: v["scale"].as_u64().unwrap_or(3).clamp(1, 8) as u32,
         velocidad: v["speed"].as_f64().unwrap_or(1.0).clamp(0.1, 5.0) as f32,
         trepa: v["climb"].as_bool().unwrap_or(true),
+        travieso: v["mischief"].as_bool().unwrap_or(cfg!(windows)),
+        contraste: v["contrast"].as_bool().unwrap_or(true),
     }
 }
 
@@ -756,6 +764,7 @@ impl App {
             );
             b.velocidad = self.cfg.velocidad;
             b.trepa = self.cfg.trepa;
+            b.travieso = self.cfg.travieso;
             b.salta = especie.brinca;
             b.aparece(self.pantalla.0);
             self.mascotas.push(Mascota {

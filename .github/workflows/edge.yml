@@ -55,7 +55,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # aquí sí corren las pruebas de lo de Windows (escritorio.rs)
+      - run: cargo test --release --locked
       - run: cargo build --release --locked
+      # el .exe y su sha256, y al último su commit (el que ve el actualizador:
+      # así nunca ve un commit nuevo con el .exe viejo todavía arriba)
       - name: publicar
         shell: bash
         env:
@@ -63,4 +67,6 @@ jobs:
         run: |
           cp "target/release/$APP.exe" "$APP-x86_64-windows.exe"
           sha256sum "$APP-x86_64-windows.exe" > "$APP-x86_64-windows.exe.sha256"
+          echo "$GITHUB_SHA" > "$APP-windows.commit"
           gh release upload edge "$APP-x86_64-windows.exe" "$APP-x86_64-windows.exe.sha256" --clobber
+          gh release upload edge "$APP-windows.commit" --clobber

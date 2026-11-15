@@ -4,25 +4,38 @@
 //! clics. Los que viven dentro de una ventana se acomodan justo encima de
 //! ella (no siempre encima de todo), para que otra ventana los pueda tapar.
 //!
+//! Cada uno vive en una pantalla; por las orillas que dan a otra se cruzan
+//! (caminando, persiguiendo al cursor, o si los avientas para allá). Si se
+//! confunden con lo que tienen atrás, les sale un halo (contraste). Bailan
+//! si suena música (musica.rs), hacen travesuras si son caga palos
+//! (travesuras.rs) y se actualizan desde el menú (actualiza.rs).
+//!
 //! Lo que hay en el escritorio lo ve escritorio.rs; el ícono de la bandeja
 //! con su menú, bandeja.rs. El cerebro (bicho.rs), el dibujo (arte.rs) y la
 //! correteada (juego.rs) son los mismos de Linux.
 //!
 //! Lo que aquí no hay (todavía): las letras de las terminales, claudio con
-//! Claude Code, las reacciones a discada y el baile con música.
+//! Claude Code y las reacciones a discada.
 //!
 //!   bicho.exe             los suelta (doble clic; si ya andan, nada)
 //!   bicho.exe michi baba  esos (si ya andan, los cambia)
 //!   bicho.exe off         los guarda
 //!   bicho.exe toggle      una cosa o la otra
 //!   bicho.exe ver         cómo se ven, en la terminal
+//!   bicho.exe actualiza   baja la versión nueva
 
+mod actualiza;
 mod bandeja;
 mod escritorio;
+mod musica;
+mod travesuras;
 
 use super::*;
 use escritorio::{Caja, Pantalla};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use travesuras::Travesura;
 use windows_sys::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM,
 };
@@ -50,12 +63,22 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 pub(crate) const CLASE_BICHO: &str = "bicho";
 pub(crate) const CLASE_CONTROL: &str = "bicho-control";
 const TIMER: usize = 1;
+/// lo que manda el hilo del actualizador al acabar
+const WM_ACTUALIZA: u32 = WM_APP + 2;
 /// con qué tanto de lo último que lo moviste se calcula el aventón
 const VENTANA_AVIENTA: Duration = Duration::from_millis(90);
 /// más lento que esto (px/s) al soltarlo es "dejarlo ahí", no aventarlo
 const SOLTAR: f32 = 900.0;
 /// tras moverse una ventana, cuánto sigue a 60 por segundo
 const SE_MOVIO: f32 = 0.6;
+/// cada cuánto ve si se confunden con lo de atrás (s)
+const CADA_CONTRASTE: f32 = 0.5;
+/// qué tan parecidos (de luz, 0 a 1) a lo de atrás para ponerles halo, y qué
+/// tan distintos para quitárselo
+const HALO_SI: f32 = 0.2;
+const HALO_NO: f32 = 0.32;
+/// cada cuánto ve solo si hay versión nueva (s)
+const CADA_REVISA: f32 = 6.0 * 3600.0;
 
 /// Texto para Windows (UTF-16 con su cero al final).
 pub(crate) fn w(s: &str) -> Vec<u16> {
@@ -65,6 +88,10 @@ pub(crate) fn w(s: &str) -> Vec<u16> {
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
+
+/// Lo que dijo el actualizador (lo deja su hilo; lo lee la ventana).
+type Resultado = Result<Option<String>, String>;
+static ACTUALIZO: Mutex<Option<Resultado>> = Mutex::new(None);
 
 /// Con la App, si no la está usando ya alguien más arriba (Windows a veces
 /// llama a la ventana desde dentro de otra llamada: entonces se salta).
@@ -116,7 +143,7 @@ fn consola() {
 fn uso() {
     let nombres: Vec<_> = arte::todas().iter().map(|e| e.nombre).collect();
     eprintln!(
-        "\nuso: bicho [especie…] | off | toggle | ver\nespecies: {}",
+        "\nuso: bicho [especie…] | off | toggle | ver | actualiza\nespecies: {}",
         nombres.join(", ")
     );
 }
@@ -142,6 +169,25 @@ pub(crate) fn main() {
             ver();
             0
         }
+        Some("actualiza" | "update") => {
+            consola();
+            actualiza_aqui()
+        }
+        Some("--version" | "-V" | "version") => {
+            consola();
+            println!(
+                "\nbicho {}",
+                actualiza::COMMIT.map_or("(compilado a mano)", actualiza::corto)
+            );
+            0
+        }
+        // el nuevo, recién actualizado: espera a que el viejo se cierre
+        Some("_espera") => {
+            if let Some(pid) = args.get(2).and_then(|p| p.parse().ok()) {
+                actualiza::espera(pid);
+            }
+            suelta(&[])
+        }
         Some("-h" | "--help" | "ayuda") => {
             consola();
             uso();
@@ -163,12 +209,38 @@ pub(crate) fn main() {
     std::process::exit(code);
 }
 
+/// `bicho actualiza` desde una terminal.
+fn actualiza_aqui() -> i32 {
+    println!("\nbuscando versión nueva…");
+    match actualiza::cambia() {
+        Ok(Some(c)) => {
+            if anda() {
+                guarda();
+                if let Ok(exe) = std::env::current_exe() {
+                    let _ = std::process::Command::new(exe).spawn();
+                }
+            }
+            println!("listo: ya es la {}", actualiza::corto(&c));
+            0
+        }
+        Ok(None) => {
+            println!("ya está al día");
+            0
+        }
+        Err(e) => {
+            eprintln!("bicho: {e}");
+            1
+        }
+    }
+}
+
 /// Los suelta (en este mismo proceso: aquí no hay terminal que esperar).
 fn suelta(pets: &[String]) -> i32 {
     if anda() && pets.is_empty() {
         return 0;
     }
     std::panic::set_hook(Box::new(|info| bitacora(&format!("tronó: {info}"))));
+    actualiza::limpia();
     match vive(pets) {
         Ok(()) => 0,
         Err(e) => {
@@ -195,35 +267,101 @@ struct Arrastre {
     muestras: VecDeque<(Instant, f32, f32)>,
 }
 
-/// Un animalito en pantalla: su ventanita, su lienzo y su cabeza.
-pub(crate) struct Mascota {
-    pub(crate) especie: &'static arte::Especie,
-    pub(crate) bicho: bicho::Bicho,
-    hwnd: HWND,
+/// Donde se pinta un animalito: un DIB de 32 bits, de arriba para abajo
+/// (los mismos bytes que el ARGB8888 de Wayland).
+struct Lienzo {
     dc: HDC,
     bmp: HBITMAP,
     bits: *mut u8,
     /// pixeles de verdad por cuadrito del dibujo
     px: usize,
+}
+
+impl Lienzo {
+    fn new(px: usize) -> Option<Lienzo> {
+        let (w, h) = ((arte::ANCHO * px) as i32, (arte::ALTO * px) as i32);
+        unsafe {
+            let mut bi: BITMAPINFO = std::mem::zeroed();
+            bi.bmiHeader = BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..std::mem::zeroed()
+            };
+            let mut bits = std::ptr::null_mut();
+            let bmp = CreateDIBSection(
+                std::ptr::null_mut(),
+                &bi,
+                DIB_RGB_COLORS,
+                &mut bits,
+                std::ptr::null_mut(),
+                0,
+            );
+            let dc = CreateCompatibleDC(std::ptr::null_mut());
+            if bmp.is_null() || bits.is_null() || dc.is_null() {
+                if !bmp.is_null() {
+                    DeleteObject(bmp);
+                }
+                if !dc.is_null() {
+                    DeleteDC(dc);
+                }
+                return None;
+            }
+            SelectObject(dc, bmp);
+            Some(Lienzo {
+                dc,
+                bmp,
+                bits: bits as *mut u8,
+                px,
+            })
+        }
+    }
+
+    fn tam(&self) -> (usize, usize) {
+        (arte::ANCHO * self.px, arte::ALTO * self.px)
+    }
+}
+
+impl Drop for Lienzo {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteDC(self.dc);
+            DeleteObject(self.bmp);
+        }
+    }
+}
+
+/// Un animalito en pantalla: su ventanita, su lienzo y su cabeza.
+pub(crate) struct Mascota {
+    pub(crate) especie: &'static arte::Especie,
+    pub(crate) bicho: bicho::Bicho,
+    hwnd: HWND,
+    lienzo: Lienzo,
+    /// en qué pantalla anda
+    pub(crate) mon: usize,
     colores: [u32; arte::COLORES],
     /// lo último que se pintó: si no cambia, no se vuelve a pintar
-    pintado: Option<(arte::Grid, [u32; arte::COLORES])>,
+    pintado: Option<(arte::Grid, [u32; arte::COLORES], Option<u32>, usize)>,
     /// dónde está la ventanita (pixeles de verdad)
     pos: (i32, i32),
     /// su cuerpo en el lienzo (x, y, ancho, alto; lógicos): ahí es "encima"
     cuerpo: Option<(f32, f32, f32, f32)>,
-    /// encima de qué ventana anda acomodado (None: encima de todo)
+    /// encima de qué ventana anda acomodado (None: encima de todo;
+    /// Some(null): hay que volver a ponerlo)
     acomodo: Option<HWND>,
     visible: bool,
+    /// el halo (ARGB) cuando se confunde con lo de atrás
+    halo: Option<u32>,
+    /// lo que le falta para poder volver a escaparse del cursor (s)
+    pub(crate) escapa_otra: f32,
 }
 
 impl Drop for Mascota {
     fn drop(&mut self) {
-        unsafe {
-            DestroyWindow(self.hwnd);
-            DeleteDC(self.dc);
-            DeleteObject(self.bmp);
-        }
+        unsafe { DestroyWindow(self.hwnd) };
     }
 }
 
@@ -235,19 +373,34 @@ pub(crate) struct App {
     pub(crate) cfg: Config,
     control: HWND,
     icono: HICON,
-    pantalla: Pantalla,
-    mundo: mundo::Mundo,
-    /// las ventanas que se ven, enteras, de arriba para abajo
-    cajas: Vec<Caja>,
-    cursor: Option<(f32, f32)>,
+    pub(crate) pantallas: Vec<Pantalla>,
+    /// lo de cada pantalla
+    mundos: Vec<mundo::Mundo>,
+    /// las ventanas que se ven en cada pantalla, enteras, de arriba para abajo
+    cajas: Vec<Vec<Caja>>,
+    /// el cursor en pixeles de verdad, y el del cuadro pasado
+    pub(crate) cursor_px: Option<(i32, i32)>,
+    pub(crate) cursor_px_antes: Option<(i32, i32)>,
     arrastre: Option<Arrastre>,
-    /// hay algo en pantalla completa: escondidos
-    tapados: bool,
+    /// la pantalla con algo en pantalla completa: ahí se esconden
+    tapada: Option<usize>,
     ultimo: Instant,
     cada_mundo: f32,
     cada_resto: f32,
+    cada_contraste: f32,
     se_movio: f32,
     colores_mtime: Option<SystemTime>,
+    /// ¿suena música? (lo dice el hilo de musica.rs, si ya se arrancó)
+    musica: Arc<AtomicBool>,
+    oyendo: bool,
+    pub(crate) travesura: Option<Travesura>,
+    pub(crate) cada_travesura: f32,
+    /// la versión nueva que hay (su commit), si hay
+    nueva: Option<String>,
+    /// de cuál ya avisaste (para no repetir)
+    avisada: Option<String>,
+    actualizando: bool,
+    cada_revisa: f32,
 }
 
 fn vive(pets: &[String]) -> Result<(), String> {
@@ -311,17 +464,27 @@ fn vive(pets: &[String]) -> Result<(), String> {
             cfg,
             control,
             icono,
-            pantalla: escritorio::pantalla(),
-            mundo: mundo::Mundo::default(),
+            pantallas: escritorio::pantallas(),
+            mundos: Vec::new(),
             cajas: Vec::new(),
-            cursor: None,
+            cursor_px: None,
+            cursor_px_antes: None,
             arrastre: None,
-            tapados: false,
+            tapada: None,
             ultimo: Instant::now(),
             cada_mundo: 0.0,
             cada_resto: 0.0,
+            cada_contraste: 0.0,
             se_movio: 0.0,
             colores_mtime: mtime(&colores_path()),
+            musica: Arc::new(AtomicBool::new(false)),
+            oyendo: false,
+            travesura: None,
+            cada_travesura: 60.0,
+            nueva: None,
+            avisada: None,
+            actualizando: false,
+            cada_revisa: 30.0,
         };
         app.crea();
         bandeja::pon(control, icono);
@@ -333,8 +496,15 @@ fn vive(pets: &[String]) -> Result<(), String> {
             DispatchMessageW(&msg);
         }
         bandeja::quita(control);
-        // al soltar la App se cierran sus ventanitas
-        APP.with(|a| a.borrow_mut().take());
+        // al soltar la App se cierran sus ventanitas (y ninguna ventana se
+        // queda hundida por un pisotón)
+        APP.with(|a| {
+            if let Some(mut app) = a.borrow_mut().take()
+                && let Some(t) = app.travesura.take()
+            {
+                app.acaba(t);
+            }
+        });
         DestroyIcon(icono);
     }
     Ok(())
@@ -342,8 +512,8 @@ fn vive(pets: &[String]) -> Result<(), String> {
 
 type WndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
 
-/// La ventana escondida: el reloj, el ícono de la bandeja y el "ya
-/// guárdense" de `bicho off`.
+/// La ventana escondida: el reloj, el ícono de la bandeja, el actualizador
+/// y el "ya guárdense" de `bicho off`.
 unsafe extern "system" fn ventana_control(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     static EXPLORER: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     let reinicio = *EXPLORER.get_or_init(|| {
@@ -364,6 +534,13 @@ unsafe extern "system" fn ventana_control(h: HWND, msg: u32, wp: WPARAM, lp: LPA
             let ev = lp as u32;
             if ev == WM_RBUTTONUP || ev == WM_LBUTTONUP {
                 menu(h);
+            }
+            0
+        }
+        WM_ACTUALIZA => {
+            let r = ACTUALIZO.lock().ok().and_then(|mut r| r.take());
+            if let Some(r) = r {
+                con_app(|a| a.actualizado(wp == 1, r));
             }
             0
         }
@@ -443,17 +620,30 @@ unsafe extern "system" fn ventana_bicho(h: HWND, msg: u32, wp: WPARAM, lp: LPARA
 }
 
 impl App {
+    /// Pixeles de verdad por cuadrito en esa pantalla.
+    fn px_en(&self, mon: usize) -> usize {
+        let e = self.pantallas.get(mon).map_or(1.0, |p| p.escala);
+        (self.cfg.escala as f32 * e).round().max(1.0) as usize
+    }
+
     fn crea(&mut self) {
         let celda = self.cfg.escala as f32;
-        let px = (celda * self.pantalla.escala).round().max(1.0) as usize;
         let (cw, ch) = (arte::ANCHO as f32 * celda, arte::ALTO as f32 * celda);
-        let (pw, ph) = ((arte::ANCHO * px) as i32, (arte::ALTO * px) as i32);
         let clase = w(CLASE_BICHO);
+        // salen en la pantalla donde anda el cursor
+        let mon = escritorio::cursor()
+            .and_then(|c| escritorio::pantalla_de(&self.pantallas, c))
+            .unwrap_or(0);
+        let px = self.px_en(mon);
+        let ancho = self.pantallas.get(mon).map_or(1920.0, |p| p.tam.0);
         for (i, nombre) in self.cfg.pets.clone().iter().enumerate() {
             let Some(especie) = arte::especie(nombre) else {
                 continue;
             };
-            let Some((hwnd, dc, bmp, bits)) = (unsafe { ventanita(&clase, pw, ph) }) else {
+            let Some(lienzo) = Lienzo::new(px) else {
+                continue;
+            };
+            let Some(hwnd) = (unsafe { ventanita(&clase, lienzo.tam()) }) else {
                 continue;
             };
             let semilla = self
@@ -463,34 +653,64 @@ impl App {
             let mut b = bicho::Bicho::new(celda, cw, ch, semilla);
             b.velocidad = self.cfg.velocidad;
             b.trepa = self.cfg.trepa;
+            b.travieso = self.cfg.travieso;
             b.salta = especie.brinca;
-            b.aparece(self.pantalla.tam.0);
+            b.pantalla = mon as u8;
+            b.aparece(ancho);
             self.mascotas.push(Mascota {
                 especie,
                 bicho: b,
                 hwnd,
-                dc,
-                bmp,
-                bits,
-                px,
+                lienzo,
+                mon,
                 colores: colores(especie),
                 pintado: None,
                 pos: (i32::MIN, i32::MIN),
                 cuerpo: None,
                 acomodo: None,
                 visible: false,
+                halo: None,
+                escapa_otra: 0.0,
             });
         }
     }
 
-    /// Otra vez desde cero (cambió la config, el tamaño o la escala).
+    /// Otra vez desde cero (cambió la config o el tamaño).
     fn recrea(&mut self) {
         if self.arrastre.take().is_some() {
             unsafe { ReleaseCapture() };
         }
+        if let Some(t) = self.travesura.take() {
+            self.acaba(t);
+        }
         self.juego = None;
         self.mascotas.clear();
         self.crea();
+    }
+
+    /// Que su lienzo sea del tamaño de su pantalla (otra escala: otro
+    /// tamaño de pixel).
+    fn pon_lienzo(&mut self, i: usize) {
+        let px = self.px_en(self.mascotas[i].mon);
+        let p = &mut self.mascotas[i];
+        if p.lienzo.px == px {
+            return;
+        }
+        let Some(l) = Lienzo::new(px) else { return };
+        let (w, h) = l.tam();
+        p.lienzo = l;
+        p.pintado = None;
+        unsafe {
+            SetWindowPos(
+                p.hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                w as i32,
+                h as i32,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
     }
 
     fn sal(&mut self) {
@@ -501,12 +721,21 @@ impl App {
     /// pegada por abajo y centrada (al 125 % los cuadritos no miden justo
     /// lo lógico, y así las patas quedan donde van).
     fn a_pantalla(&self, p: &Mascota) -> (i32, i32) {
-        let (b, s) = (&p.bicho, self.pantalla.escala);
-        let (pw, ph) = ((arte::ANCHO * p.px) as i32, (arte::ALTO * p.px) as i32);
+        let Some(ps) = self.pantallas.get(p.mon) else {
+            return p.pos;
+        };
+        let (b, s) = (&p.bicho, ps.escala);
+        let (pw, ph) = p.lienzo.tam();
         (
-            self.pantalla.origen.0 + ((b.x + b.cw / 2.0) * s).round() as i32 - pw / 2,
-            self.pantalla.origen.1 + ((b.y - b.dy + b.ch) * s).round() as i32 - ph,
+            ps.rect.0 + ((b.x + b.cw / 2.0) * s).round() as i32 - pw as i32 / 2,
+            ps.rect.1 + ((b.y - b.dy + b.ch) * s).round() as i32 - ph as i32,
         )
+    }
+
+    /// El cursor en lógicos de la pantalla de ese animalito.
+    fn cursor_de(&self, i: usize) -> Option<(f32, f32)> {
+        let ps = self.pantallas.get(self.mascotas[i].mon)?;
+        self.cursor_px.map(|c| ps.a_logico(c))
     }
 
     fn cual(&self, h: HWND) -> Option<usize> {
@@ -518,7 +747,11 @@ impl App {
         if self.arrastre.is_some() {
             return;
         }
-        let Some((gx, gy)) = escritorio::cursor(&self.pantalla) else {
+        if let Some(t) = self.travesura.take() {
+            self.acaba(t);
+        }
+        self.cursor_px = escritorio::cursor();
+        let Some((gx, gy)) = self.cursor_de(i) else {
             return;
         };
         let ahora = Instant::now();
@@ -535,15 +768,35 @@ impl App {
 
     fn mueve(&mut self, h: HWND) {
         let Some(i) = self.cual(h) else { return };
-        let Some((gx, gy)) = escritorio::cursor(&self.pantalla) else {
+        let Some(c) = escritorio::cursor() else {
             return;
         };
-        let Some(a) = self.arrastre.as_mut().filter(|a| a.i == i) else {
+        if self.arrastre.as_ref().is_none_or(|a| a.i != i) {
             // nomás pasó por encima (si de veras se movió el mouse: Windows
             // también avisa cuando es él el que se mueve debajo)
-            if self.cursor != Some((gx, gy)) {
+            if self.cursor_px != Some(c) {
                 self.mascotas[i].bicho.mouse_se_movio();
             }
+            return;
+        }
+        // lo llevas a otra pantalla
+        if let Some(mon) = escritorio::pantalla_de(&self.pantallas, c)
+            && mon != self.mascotas[i].mon
+        {
+            self.mascotas[i].mon = mon;
+            self.mascotas[i].bicho.pantalla = mon as u8;
+            self.pon_lienzo(i);
+            if let Some(a) = self.arrastre.as_mut() {
+                a.muestras.clear();
+                // ya no cuenta como clic
+                a.inicio.2 = Instant::now() - Duration::from_secs(1);
+            }
+        }
+        self.cursor_px = Some(c);
+        let Some((gx, gy)) = self.cursor_de(i) else {
+            return;
+        };
+        let Some(a) = self.arrastre.as_mut() else {
             return;
         };
         let ahora = Instant::now();
@@ -561,7 +814,8 @@ impl App {
         let Some(a) = self.arrastre.take() else {
             return;
         };
-        let (gx, gy) = escritorio::cursor(&self.pantalla).unwrap_or((a.inicio.0, a.inicio.1));
+        self.cursor_px = escritorio::cursor();
+        let (gx, gy) = self.cursor_de(a.i).unwrap_or((a.inicio.0, a.inicio.1));
         // ¿traías Ctrl (o la tecla de Windows)? se mete a la ventana
         let tecla = |k: u16| unsafe { GetAsyncKeyState(k as i32) } < 0;
         let adentro = tecla(VK_CONTROL) || tecla(VK_LWIN) || tecla(VK_RWIN);
@@ -587,9 +841,13 @@ impl App {
             _ => (0.0, 0.0),
         };
         b.avienta(vx, vy);
+        let mon = self.mascotas[a.i].mon;
         if adentro
             && vx.hypot(vy) < SOLTAR
-            && let Some(v) = escritorio::ventana_en(&self.cajas, gx, gy)
+            && let Some(v) = self
+                .cajas
+                .get(mon)
+                .and_then(|c| escritorio::ventana_en(c, gx, gy))
         {
             self.mascotas[a.i].bicho.entra(v);
         }
@@ -598,18 +856,43 @@ impl App {
     fn lee_mundo(&mut self) {
         let alto = arte::ALTO as f32 * self.cfg.escala as f32;
         let ancho = arte::ANCHO as f32 * self.cfg.escala as f32;
-        let (nuevo, cajas) = escritorio::mundo(&self.pantalla, alto, ancho);
-        let movida = nuevo.ventanas.iter().any(|v| {
-            self.mundo
-                .ventanas
-                .iter()
-                .any(|r| r.id == v.id && (r.x, r.y, r.w, r.h) != (v.x, v.y, v.w, v.h))
+        let nuevos = escritorio::mundos(&self.pantallas, alto, ancho);
+        let movida = nuevos.iter().zip(&self.mundos).any(|((n, _), v)| {
+            n.ventanas.iter().any(|a| {
+                v.ventanas
+                    .iter()
+                    .any(|r| r.id == a.id && (r.x, r.y, r.w, r.h) != (a.x, a.y, a.w, a.h))
+            })
         });
         if movida {
             self.se_movio = SE_MOVIO;
         }
-        self.mundo = nuevo;
-        self.cajas = cajas;
+        (self.mundos, self.cajas) = nuevos.into_iter().unzip();
+    }
+
+    /// Se salió por la orilla de su pantalla: a la de al lado, a la misma
+    /// altura (si no hay, se regresa).
+    fn cruza(&mut self, i: usize, der: bool) {
+        let p = &self.mascotas[i];
+        let Some(ps) = self.pantallas.get(p.mon) else {
+            self.mascotas[i].bicho.da_vuelta();
+            return;
+        };
+        let b = &p.bicho;
+        let pies = ps.rect.1 + ((b.y + b.ch) * ps.escala).round() as i32;
+        let Some(j) = escritorio::vecina(&self.pantallas, p.mon, der, pies) else {
+            self.mascotas[i].bicho.da_vuelta();
+            return;
+        };
+        let q = self.pantallas[j];
+        let (cw, ch) = (b.cw, b.ch);
+        let y = ((pies - q.rect.1) as f32 / q.escala - ch).min(q.tam.1 - q.abajo - ch);
+        let x = if der { 0.0 } else { (q.tam.0 - cw).max(0.0) };
+        let p = &mut self.mascotas[i];
+        p.mon = j;
+        p.bicho.pantalla = j as u8;
+        p.bicho.cruza(x, y);
+        self.pon_lienzo(i);
     }
 
     fn tick(&mut self) {
@@ -617,52 +900,25 @@ impl App {
         self.ultimo = Instant::now();
         self.cada_mundo -= dt;
         self.cada_resto -= dt;
+        self.cada_contraste -= dt;
         self.se_movio = (self.se_movio - dt).max(0.0);
         let mut noche = None;
         if self.cada_resto <= 0.0 {
             self.cada_resto = 0.4;
             noche = Some(es_de_noche());
-            // cambiaste la escala, la resolución o la barra de tareas
-            let p = escritorio::pantalla();
-            if p != self.pantalla {
-                let otra_escala = p.escala != self.pantalla.escala;
-                self.pantalla = p;
-                if otra_escala {
-                    self.recrea();
-                }
-            }
-            let m = mtime(&colores_path());
-            if m != self.colores_mtime {
-                self.colores_mtime = m;
-                for p in &mut self.mascotas {
-                    p.colores = colores(p.especie);
-                }
-            }
-            let tapados = escritorio::pantalla_completa();
-            if tapados != self.tapados {
-                self.tapados = tapados;
-                for p in &mut self.mascotas {
-                    p.visible = false;
-                    unsafe { ShowWindow(p.hwnd, SW_HIDE) };
-                    p.pintado = None;
-                }
-            }
-            // otras "siempre encima" pudieron quedar arriba
-            for p in &mut self.mascotas {
-                p.acomodo = Some(std::ptr::null_mut());
-            }
+            self.resto();
         }
-        if self.tapados {
-            return;
-        }
+        self.cursor_px = escritorio::cursor();
+        self.tick_travesuras(dt);
         let pegados = self.mascotas.iter().any(|p| p.bicho.pegado());
-        if self.cada_mundo <= 0.0 || pegados {
+        if self.cada_mundo <= 0.0 || pegados || self.mundos.len() != self.pantallas.len() {
             self.cada_mundo = 0.4;
             self.lee_mundo();
         }
-        let cursor = escritorio::cursor(&self.pantalla);
         // el cursor encima de su cuerpo (para el cariño y su casita)
-        for p in &mut self.mascotas {
+        for i in 0..self.mascotas.len() {
+            let cursor = self.cursor_de(i);
+            let p = &mut self.mascotas[i];
             p.bicho.encima = match (cursor, p.cuerpo) {
                 (Some((cx, cy)), Some((x, y, w, h))) => {
                     let (bx, by) = (p.bicho.x + x, p.bicho.y - p.bicho.dy + y);
@@ -671,16 +927,27 @@ impl App {
                 _ => false,
             };
         }
-        self.cursor = cursor;
-        let (w, h) = self.pantalla.tam;
         self.tick_juego(dt);
+        let musica = self.cfg.baila && self.musica.load(Ordering::Relaxed);
         let mut looks = Vec::with_capacity(self.mascotas.len());
-        for p in &mut self.mascotas {
-            p.bicho.musica = false;
+        for i in 0..self.mascotas.len() {
+            let cursor = self.cursor_de(i);
+            let mon = self.mascotas[i].mon;
+            let (Some(ps), Some(m)) = (self.pantallas.get(mon), self.mundos.get(mon)) else {
+                looks.push(None);
+                continue;
+            };
+            let b = &mut self.mascotas[i].bicho;
+            let pies = ps.rect.1 + ((b.y + b.ch) * ps.escala).round() as i32;
+            b.puertas = (
+                escritorio::vecina(&self.pantallas, mon, false, pies).is_some(),
+                escritorio::vecina(&self.pantallas, mon, true, pies).is_some(),
+            );
+            b.musica = musica;
             if let Some(n) = noche {
-                p.bicho.noche = n;
+                b.noche = n;
             }
-            looks.push(p.bicho.tick(dt, &self.mundo, w, h, self.cursor));
+            looks.push(Some(b.tick(dt, m, ps.tam.0, ps.tam.1, cursor)));
         }
         // si dos se topan en el mismo lugar, se saludan
         for i in 0..self.mascotas.len() {
@@ -689,31 +956,141 @@ impl App {
                 let (Some((xa, sa)), Some((xb, sb))) = (a.saludable(), b.saludable()) else {
                     continue;
                 };
-                if sa == sb && (xa - xb).abs() < a.cw * 0.7 {
-                    self.mascotas[i].bicho.cariño(xb > xa);
-                    self.mascotas[j].bicho.cariño(xa > xb);
-                    looks[i] = self.mascotas[i].bicho.tick(0.0, &self.mundo, w, h, None);
-                    looks[j] = self.mascotas[j].bicho.tick(0.0, &self.mundo, w, h, None);
+                if sa != sb || (xa - xb).abs() >= a.cw * 0.7 {
+                    continue;
                 }
+                let mon = self.mascotas[i].mon;
+                let (Some(ps), Some(m)) = (self.pantallas.get(mon), self.mundos.get(mon)) else {
+                    continue;
+                };
+                let (w, h) = ps.tam;
+                self.mascotas[i].bicho.cariño(xb > xa);
+                self.mascotas[j].bicho.cariño(xa > xb);
+                looks[i] = Some(self.mascotas[i].bicho.tick(0.0, m, w, h, None));
+                looks[j] = Some(self.mascotas[j].bicho.tick(0.0, m, w, h, None));
+            }
+        }
+        // los que se salieron por la orilla, a la otra pantalla
+        for i in 0..self.mascotas.len() {
+            if let Some(der) = self.mascotas[i].bicho.sale {
+                self.cruza(i, der);
+            }
+        }
+        if self.cada_contraste <= 0.0 {
+            self.cada_contraste = CADA_CONTRASTE;
+            for i in 0..self.mascotas.len() {
+                self.contraste(i);
             }
         }
         for (i, look) in looks.iter().enumerate() {
-            let g = arte::grid(self.mascotas[i].especie, look);
-            self.pinta(i, &g);
-            self.acomoda(i);
+            let tapado = self.tapada == Some(self.mascotas[i].mon);
+            match look {
+                Some(look) if !tapado => {
+                    let g = arte::grid(self.mascotas[i].especie, look);
+                    self.pinta(i, &g);
+                    self.acomoda(i);
+                }
+                _ => self.esconde(i),
+            }
+        }
+    }
+
+    /// Lo que no urge (cada 0.4 s): las pantallas, los colores, la pantalla
+    /// completa, la música y la versión nueva.
+    fn resto(&mut self) {
+        // conectaste o quitaste una pantalla, cambiaste la escala o la barra
+        let ps = escritorio::pantallas();
+        if ps != self.pantallas && !ps.is_empty() {
+            self.pantallas = ps;
+            self.mundos.clear();
+            for i in 0..self.mascotas.len() {
+                if self.mascotas[i].mon >= self.pantallas.len() {
+                    self.mascotas[i].mon = 0;
+                    self.mascotas[i].bicho.pantalla = 0;
+                    let ancho = self.pantallas[0].tam.0;
+                    self.mascotas[i].bicho.aparece(ancho);
+                }
+                self.pon_lienzo(i);
+            }
+        }
+        let m = mtime(&colores_path());
+        if m != self.colores_mtime {
+            self.colores_mtime = m;
+            for p in &mut self.mascotas {
+                p.colores = colores(p.especie);
+            }
+        }
+        self.tapada = escritorio::completa_en(&self.pantallas);
+        // otras "siempre encima" pudieron quedar arriba
+        for p in &mut self.mascotas {
+            if p.acomodo.is_none() {
+                p.acomodo = Some(std::ptr::null_mut());
+            }
+        }
+        if self.cfg.baila && !self.oyendo {
+            self.oyendo = true;
+            musica::oye(self.musica.clone());
+        }
+        self.cada_revisa -= 0.4;
+        if self.cada_revisa <= 0.0 {
+            self.cada_revisa = CADA_REVISA;
+            self.revisa(false);
+        }
+    }
+
+    fn esconde(&mut self, i: usize) {
+        let p = &mut self.mascotas[i];
+        if p.visible {
+            p.visible = false;
+            p.pintado = None;
+            unsafe { ShowWindow(p.hwnd, SW_HIDE) };
+        }
+    }
+
+    /// ¿Se confunde con lo que tiene atrás? Entonces un halo: claro si lo de
+    /// atrás es oscuro, oscuro si es claro.
+    fn contraste(&mut self, i: usize) {
+        let p = &mut self.mascotas[i];
+        if !self.cfg.contraste || !p.visible || p.bicho.oculto {
+            if p.halo.take().is_some() {
+                p.pintado = None;
+            }
+            return;
+        }
+        let (w, h) = p.lienzo.tam();
+        let Some(atras) = escritorio::luz_detras(p.pos.0, p.pos.1, w as i32, h as i32) else {
+            return;
+        };
+        let cuerpo = arte::luz(p.colores[arte::CUERPO as usize] & 0xff_ffff);
+        let diferencia = (atras - cuerpo).abs();
+        let quiere = if p.halo.is_some() {
+            diferencia < HALO_NO
+        } else {
+            diferencia < HALO_SI
+        };
+        // ARGB premultiplicado: blanquito o negrito, casi opaco
+        let halo = quiere.then_some(if atras < 0.5 {
+            0xd8d8_d8d8
+        } else {
+            0xd80c_0c0c
+        });
+        if halo != p.halo {
+            p.halo = halo;
+            p.pintado = None;
         }
     }
 
     fn rapido(&self) -> bool {
         self.arrastre.is_some()
             || self.se_movio > 0.0
+            || self.travesura.is_some()
             || self.mascotas.iter().any(|p| p.bicho.en_el_aire())
     }
 
     /// Cada cuánto dibujar: rápido si algo se mueve, a 30 si alguien anda
     /// haciendo algo, y a 10 si todos están quietos.
     fn cuadro(&self) -> Duration {
-        if self.tapados {
+        if self.tapada.is_some() && self.mascotas.iter().all(|p| self.tapada == Some(p.mon)) {
             return Duration::from_millis(400);
         }
         if self.rapido() {
@@ -759,31 +1136,22 @@ impl App {
                 (y1 - y0 + 1) as f32 * celda,
             )
         });
+        let px = p.lienzo.px;
         let igual = p
             .pintado
             .as_ref()
-            .is_some_and(|(gg, c)| gg == g && c == &p.colores);
+            .is_some_and(|(gg, c, h, x)| gg == g && c == &p.colores && *h == p.halo && *x == px);
         if igual {
-            if pos != p.pos {
-                p.pos = pos;
-                unsafe {
-                    SetWindowPos(
-                        p.hwnd,
-                        std::ptr::null_mut(),
-                        pos.0,
-                        pos.1,
-                        0,
-                        0,
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    )
-                };
-            }
+            self.mueve_ventanita(i);
             return;
         }
-        let (pw, ph) = (arte::ANCHO * p.px, arte::ALTO * p.px);
-        let canvas = unsafe { std::slice::from_raw_parts_mut(p.bits, pw * ph * 4) };
-        arte::pinta(g, &p.colores, p.px, canvas);
-        p.pintado = Some((*g, p.colores));
+        let (pw, ph) = p.lienzo.tam();
+        let canvas = unsafe { std::slice::from_raw_parts_mut(p.lienzo.bits, pw * ph * 4) };
+        arte::pinta(g, &p.colores, px, canvas);
+        if let Some(halo) = p.halo {
+            arte::halo(canvas, pw, ph, px.div_ceil(2).max(1), halo);
+        }
+        p.pintado = Some((*g, p.colores, p.halo, px));
         p.pos = pos;
         let destino = POINT { x: pos.0, y: pos.1 };
         let tam = SIZE {
@@ -803,7 +1171,7 @@ impl App {
                 std::ptr::null_mut(),
                 &destino,
                 &tam,
-                p.dc,
+                p.lienzo.dc,
                 &origen,
                 0,
                 &mezcla,
@@ -885,11 +1253,79 @@ impl App {
             }
         }
     }
+
+    /// ¿Hay versión nueva? En su hilo (curl tarda); `y_cambia`: si hay, se
+    /// baja y se cambia de una vez.
+    fn revisa(&mut self, y_cambia: bool) {
+        if self.actualizando {
+            return;
+        }
+        self.actualizando = true;
+        let control = self.control as usize;
+        std::thread::spawn(move || {
+            let r = if y_cambia {
+                actualiza::cambia()
+            } else {
+                actualiza::hay_nueva()
+            };
+            if let Ok(mut a) = ACTUALIZO.lock() {
+                *a = Some(r);
+            }
+            unsafe { PostMessageW(control as HWND, WM_ACTUALIZA, usize::from(y_cambia), 0) };
+        });
+    }
+
+    /// Lo que dijo el actualizador.
+    fn actualizado(&mut self, cambio: bool, r: Resultado) {
+        self.actualizando = false;
+        let es = bandeja::es();
+        let t = |a: &'static str, b: &'static str| if es { a } else { b };
+        match (cambio, r) {
+            // ya se cambió: arranca el nuevo y este se va
+            (true, Ok(Some(_))) => {
+                actualiza::arranca_nuevo();
+                self.sal();
+            }
+            (true, Ok(None)) => {
+                self.nueva = None;
+                bandeja::avisa(
+                    self.control,
+                    "bicho",
+                    t(
+                        "Ya tienes la versión más nueva.",
+                        "You already have the newest version.",
+                    ),
+                );
+            }
+            (false, Ok(Some(c))) => {
+                let otra = self.avisada.as_ref() != Some(&c);
+                self.nueva = Some(c.clone());
+                if otra {
+                    self.avisada = Some(c);
+                    bandeja::avisa(
+                        self.control,
+                        "bicho",
+                        t(
+                            "Hay una versión nueva: en el menú, «Actualizar».",
+                            "There's a new version: «Update» in the menu.",
+                        ),
+                    );
+                }
+            }
+            (false, Ok(None)) => self.nueva = None,
+            (true, Err(e)) => bandeja::avisa(
+                self.control,
+                t("bicho no se pudo actualizar", "bicho couldn't update"),
+                &e,
+            ),
+            // revisando solo: si no hay internet, ni modo
+            (false, Err(_)) => {}
+        }
+    }
 }
 
-/// Una ventanita transparente con su lienzo (un DIB de 32 bits, de arriba
-/// para abajo: los mismos bytes que el ARGB8888 de Wayland).
-unsafe fn ventanita(clase: &[u16], ancho: i32, alto: i32) -> Option<(HWND, HDC, HBITMAP, *mut u8)> {
+/// Una ventanita transparente del tamaño de su lienzo.
+unsafe fn ventanita(clase: &[u16], (ancho, alto): (usize, usize)) -> Option<HWND> {
     unsafe {
         let titulo = w("bicho");
         let hwnd = CreateWindowExW(
@@ -899,41 +1335,13 @@ unsafe fn ventanita(clase: &[u16], ancho: i32, alto: i32) -> Option<(HWND, HDC, 
             WS_POPUP,
             0,
             0,
-            ancho,
-            alto,
+            ancho as i32,
+            alto as i32,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             instancia(),
             std::ptr::null(),
         );
-        if hwnd.is_null() {
-            return None;
-        }
-        let mut bi: BITMAPINFO = std::mem::zeroed();
-        bi.bmiHeader = BITMAPINFOHEADER {
-            biSize: size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: ancho,
-            biHeight: -alto,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB,
-            ..std::mem::zeroed()
-        };
-        let mut bits = std::ptr::null_mut();
-        let bmp = CreateDIBSection(
-            std::ptr::null_mut(),
-            &bi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            std::ptr::null_mut(),
-            0,
-        );
-        let dc = CreateCompatibleDC(std::ptr::null_mut());
-        if bmp.is_null() || bits.is_null() || dc.is_null() {
-            DestroyWindow(hwnd);
-            return None;
-        }
-        SelectObject(dc, bmp);
-        Some((hwnd, dc, bmp, bits as *mut u8))
+        (!hwnd.is_null()).then_some(hwnd)
     }
 }
