@@ -258,7 +258,46 @@ pub const CLAUDIO: Especie = Especie {
     color: &["#d97757"],
 };
 
-pub const TODAS: [&Especie; 4] = [&BICHO, &MICHI, &BABA, &CLAUDIO];
+/// bashira: una husky dorada, de orejas paradas, con su máscara blanca (los
+/// ojos sobre lo blanco), el pecho blanco y la cola enroscada sobre el lomo,
+/// que menea al caminar. Dorada siempre (no cambia con el look).
+pub const BASHIRA: Especie = Especie {
+    nombre: "bashira",
+    cuerpo: &[
+        "..........o...o.",
+        ".........obo.obo",
+        ".........ohbbbho",
+        "..ooo....obbbbbo",
+        ".obhbo..owpwwpwo",
+        ".obo.o..owwwwwwo",
+        ".obo.oooowwoowwo",
+        "..obbbbhhowwwwo.",
+        "..obbbbbbbbwwbo.",
+        "..obbbbbbbbbbbo.",
+        "...ooooooooooo..",
+    ],
+    cuerpo_b: Some(&[
+        "..........o...o.",
+        ".........obo.obo",
+        ".........ohbbbho",
+        ".ooo.....obbbbbo",
+        "obhbo...owpwwpwo",
+        "obo.o...owwwwwwo",
+        ".obo.ooowwwoowwo",
+        "..obbbbhhowwwwo.",
+        "..obbbbbbbbwwbo.",
+        "..obbbbbbbbbbbo.",
+        "...ooooooooooo..",
+    ]),
+    patas_a: &["...l.l.....l.l..", "..l...l...l...l."],
+    patas_b: &["...l.l.....l.l..", "...l.l.....l.l.."],
+    brinca: false,
+    blanda: None,
+    invoca: false,
+    color: &["#d9a043"],
+};
+
+pub const TODAS: [&Especie; 5] = [&BICHO, &MICHI, &BABA, &CLAUDIO, &BASHIRA];
 
 pub fn especie(nombre: &str) -> Option<&'static Especie> {
     todas().iter().copied().find(|e| e.nombre == nombre)
@@ -673,7 +712,6 @@ pub fn pinta(g: &Grid, colores: &[u32; COLORES], px: usize, buf: &mut [u8]) {
 /// Un halo alrededor del dibujo ya pintado (`buf`, ARGB de `w × h`): lo
 /// transparente a `grosor` pixeles o menos del dibujo se pinta de `argb`.
 /// Para que no se pierda en una ventana del mismo color que él.
-#[cfg_attr(not(windows), allow(dead_code))]
 pub fn halo(buf: &mut [u8], w: usize, h: usize, grosor: usize, argb: u32) {
     let mascara: Vec<bool> = buf.as_chunks::<4>().0.iter().map(|p| p[3] != 0).collect();
     let lleno = |i: usize| mascara[i];
@@ -701,7 +739,6 @@ pub fn halo(buf: &mut [u8], w: usize, h: usize, grosor: usize, argb: u32) {
 }
 
 /// Qué tan clarito es un color (0 negro, 1 blanco).
-#[cfg_attr(not(windows), allow(dead_code))]
 pub fn luz(rgb: u32) -> f32 {
     let c = |sh: u32| ((rgb >> sh) & 0xff) as f32 / 255.0;
     0.2126 * c(16) + 0.7152 * c(8) + 0.0722 * c(0)

@@ -35,6 +35,7 @@
 
 mod arte;
 mod bicho;
+mod globo;
 mod juego;
 mod mundo;
 
@@ -45,9 +46,11 @@ mod claude;
 #[cfg(unix)]
 mod claudio;
 #[cfg(unix)]
+mod contraste;
+#[cfg(unix)]
 mod dialogo;
 #[cfg(unix)]
-mod globo;
+mod etiqueta;
 #[cfg(unix)]
 mod hypr;
 #[cfg(unix)]
@@ -62,6 +65,8 @@ mod reacciones;
 mod shell;
 #[cfg(unix)]
 mod texto;
+#[cfg(unix)]
+mod travesuras;
 #[cfg(unix)]
 mod ventanas;
 // Windows: sus ventanas, su bandeja y su propio App (win/mod.rs)
@@ -207,6 +212,38 @@ fn bitacora(linea: &str) {
     }
 }
 
+/// Un animalito de la lista, con su nombre si tiene: "michi" o
+/// "michi:Canela" → ("michi", Some("Canela")).
+fn parte(p: &str) -> (&str, Option<&str>) {
+    match p.split_once(':') {
+        Some((e, n)) if !n.trim().is_empty() => (e.trim(), Some(n.trim())),
+        Some((e, _)) => (e.trim(), None),
+        None => (p.trim(), None),
+    }
+}
+
+/// La especie de una entrada de la lista ("michi:Canela" → michi).
+fn especie_de(p: &str) -> Option<&'static arte::Especie> {
+    arte::especie(parte(p).0)
+}
+
+/// La entrada con su nombre nuevo (vacío: sin nombre). Sin ":" ni saltos
+/// de línea, y no muy largo.
+fn con_nombre(p: &str, nombre: &str) -> String {
+    let limpio: String = nombre
+        .chars()
+        .filter(|c| !c.is_control() && *c != ':')
+        .take(20)
+        .collect();
+    let limpio = limpio.trim();
+    let especie = parte(p).0;
+    if limpio.is_empty() {
+        especie.to_string()
+    } else {
+        format!("{especie}:{limpio}")
+    }
+}
+
 #[cfg(unix)]
 fn petsfile() -> PathBuf {
     runtime().join("bicho.pets")
@@ -299,12 +336,19 @@ fn uso() {
 fn andando() -> Option<Vec<String>> {
     running()?;
     let s = std::fs::read_to_string(petsfile()).ok()?;
-    Some(s.split_whitespace().map(String::from).collect())
+    // uno por línea (los nombres pueden llevar espacios)
+    Some(
+        s.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect(),
+    )
 }
 
 #[cfg(unix)]
 fn suelta(pets: &[String]) -> i32 {
-    if let Some(malo) = pets.iter().find(|p| arte::especie(p).is_none()) {
+    if let Some(malo) = pets.iter().find(|p| especie_de(p).is_none()) {
         eprintln!("bicho: no conozco a '{malo}'");
         uso();
         return 2;
@@ -463,7 +507,7 @@ fn config() -> Config {
         .into_iter()
         .flatten()
         .filter_map(|p| p.as_str())
-        .filter(|p| arte::especie(p).is_some())
+        .filter(|p| especie_de(p).is_some())
         .map(String::from)
         .collect();
     Config {
@@ -582,9 +626,17 @@ struct Mascota {
     cuerpo: (f32, f32, f32),
     /// lo último que se pintó (dibujo, colores, escala): si no cambia, no se
     /// vuelve a pintar
-    pintado: Option<(arte::Grid, [u32; arte::COLORES], i32)>,
+    pintado: Option<(arte::Grid, [u32; arte::COLORES], i32, Option<u32>)>,
+    /// el halo (ARGB) cuando se confunde con lo de atrás (contraste.rs)
+    halo: Option<u32>,
     /// de qué terminal son sus repisas
     repisas_de: Option<String>,
+    /// cómo se llama (si le pusiste nombre) y cuánto le queda a la etiqueta
+    /// con su nombre (también sale con el cursor encima)
+    nombre: Option<String>,
+    muestra_nombre: f32,
+    /// lo que le falta para poder volver a escaparse del cursor (s)
+    escapa_otra: f32,
 }
 
 /// Dónde queda el cuerpo de un animalito parado, dentro de su lienzo.
@@ -621,6 +673,17 @@ struct App {
     pointer: Option<wl_pointer::WlPointer>,
     arrastre: Option<mouse::Arrastre>,
     dialogo: Option<dialogo::Dialogo>,
+    /// la etiqueta con el nombre de alguno
+    etiqueta: Option<etiqueta::Etiqueta>,
+    /// caga palos: la travesura en curso, cuándo la siguiente, y el cursor
+    /// de antes y cuánto lleva quieto
+    travesura: Option<travesuras::Travesura>,
+    cada_travesura: f32,
+    cursor_antes_t: Option<(f32, f32)>,
+    cursor_quieto: f32,
+    /// el hilo que ve qué tienen atrás (contraste.rs), y cada cuánto se le pide
+    contraste: contraste::Compartido,
+    cada_contraste: f32,
     teclado: Option<wl_keyboard::WlKeyboard>,
     /// SUPER apretado (solo se sabe mientras un animalito tiene el teclado,
     /// o sea, mientras lo agarras)
@@ -730,8 +793,8 @@ impl App {
             self.medidor = Some(capa);
         }
         let px = self.cfg.escala;
-        for (i, nombre) in self.cfg.pets.clone().iter().enumerate() {
-            let Some(especie) = arte::especie(nombre) else {
+        for (i, entrada) in self.cfg.pets.clone().iter().enumerate() {
+            let Some(especie) = especie_de(entrada) else {
                 continue;
             };
             let surface = self.compositor.create_surface(&self.qh);
@@ -778,6 +841,11 @@ impl App {
                 cuerpo: cuerpo(especie, px as f32),
                 pintado: None,
                 repisas_de: None,
+                nombre: parte(entrada).1.map(String::from),
+                // al salir, que se vea cómo se llaman
+                muestra_nombre: 3.0,
+                escapa_otra: 0.0,
+                halo: None,
             });
         }
     }
@@ -833,6 +901,8 @@ impl App {
         self.tick_teclado(dt);
         self.tick_claude(dt);
         self.tick_reacciones(dt);
+        self.tick_travesuras(dt);
+        self.tick_contraste(dt);
         self.tick_juego(dt);
         let mut looks = Vec::with_capacity(self.mascotas.len());
         for p in &mut self.mascotas {
@@ -862,6 +932,7 @@ impl App {
             self.pinta(i, &g);
         }
         self.tick_dialogo(dt);
+        self.tick_etiqueta(dt);
     }
 
     /// Con BICHO_DEBUG=1: lo que sabe del mundo y dónde anda cada quien, en
@@ -904,6 +975,60 @@ impl App {
         let _ = std::fs::write(runtime().join("bicho/debug.txt"), s);
     }
 
+    /// Contraste: le pide al hilo lo de atrás de cada uno, y con lo que ya
+    /// vio les pone o les quita el halo (con Hyprland; en KDE no hay foto).
+    fn tick_contraste(&mut self, dt: f32) {
+        self.cada_contraste -= dt;
+        if self.cada_contraste > 0.0 {
+            return;
+        }
+        self.cada_contraste = 0.5;
+        let activo = self.cfg.contraste && !kde::activo();
+        let (ox, oy) = self.mundo.origen;
+        let Ok(mut e) = self.contraste.lock() else {
+            return;
+        };
+        e.pedidos = if activo {
+            self.mascotas
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !p.bicho.oculto)
+                .filter_map(|(i, p)| {
+                    let b = &p.bicho;
+                    Some(contraste::Pedido {
+                        i,
+                        rect: (b.x + ox, b.y - b.dy + oy, b.cw, b.ch),
+                        dibujo: p.pintado.as_ref()?.0,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for (i, p) in self.mascotas.iter_mut().enumerate() {
+            let halo = match e.luz.get(&i) {
+                Some(&atras) if activo && !p.bicho.oculto => {
+                    let cuerpo = arte::luz(p.colores[arte::CUERPO as usize] & 0xff_ffff);
+                    let diferencia = (atras - cuerpo).abs();
+                    let quiere = if p.halo.is_some() {
+                        diferencia < contraste::HALO_NO
+                    } else {
+                        diferencia < contraste::HALO_SI
+                    };
+                    // ARGB premultiplicado: blanquito o negrito, casi opaco
+                    quiere.then_some(if atras < 0.5 {
+                        0xd8d8_d8d8
+                    } else {
+                        0xd80c_0c0c
+                    })
+                }
+                Some(_) | None if !activo => None,
+                _ => p.halo,
+            };
+            p.halo = halo;
+        }
+    }
+
     fn pinta(&mut self, i: usize, g: &arte::Grid) {
         let px = (self.cfg.escala as i32 * self.escala_buffer) as usize;
         let (w, h) = ((arte::ANCHO * px) as i32, (arte::ALTO * px) as i32);
@@ -938,10 +1063,9 @@ impl App {
             p.bicho.x.round() as i32,
         );
         // el mismo dibujo de antes: nomás se mueve la capa (si se movió)
-        let igual = p
-            .pintado
-            .as_ref()
-            .is_some_and(|(gg, c, e)| gg == g && c == &p.colores && *e == self.escala_buffer);
+        let igual = p.pintado.as_ref().is_some_and(|(gg, c, e, h)| {
+            gg == g && c == &p.colores && *e == self.escala_buffer && *h == p.halo
+        });
         if igual && p.pool.is_some() {
             if margen != p.margen {
                 p.layer.set_margin(margen.0, 0, 0, margen.1);
@@ -959,7 +1083,11 @@ impl App {
         };
         if let Ok((buffer, canvas)) = pool.create_buffer(w, h, w * 4, wl_shm::Format::Argb8888) {
             arte::pinta(g, &p.colores, px, canvas);
-            p.pintado = Some((*g, p.colores, self.escala_buffer));
+            if let Some(halo) = p.halo {
+                let (w, h) = (arte::ANCHO * px, arte::ALTO * px);
+                arte::halo(canvas, w, h, px.div_ceil(2).max(1), halo);
+            }
+            p.pintado = Some((*g, p.colores, self.escala_buffer, p.halo));
             if margen != p.margen {
                 p.layer.set_margin(margen.0, 0, 0, margen.1);
                 p.margen = margen;
@@ -994,7 +1122,7 @@ fn run(pets: &[String]) -> Result<(), String> {
         cfg.pets = pets.to_vec();
     }
     std::fs::write(pidfile(), std::process::id().to_string()).map_err(|e| e.to_string())?;
-    let _ = std::fs::write(petsfile(), cfg.pets.join(" "));
+    let _ = std::fs::write(petsfile(), cfg.pets.join("\n"));
     let r = vive(cfg);
     // el script de KWin, fuera (si estábamos en KDE)
     kde::termina();
@@ -1034,6 +1162,13 @@ fn vive(cfg: Config) -> Result<(), String> {
         pointer: None,
         arrastre: None,
         dialogo: None,
+        etiqueta: None,
+        travesura: None,
+        cada_travesura: 60.0,
+        cursor_antes_t: None,
+        cursor_quieto: 0.0,
+        contraste: contraste::arranca(),
+        cada_contraste: 0.0,
         teclado: None,
         super_apretado: false,
         foco_vuelve: None,
@@ -1159,7 +1294,9 @@ impl OutputHandler for App {
 #[cfg(unix)]
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
-        if self.dialogo.as_ref().is_some_and(|d| &d.layer == layer) {
+        if self.etiqueta.as_ref().is_some_and(|e| &e.layer == layer) {
+            self.etiqueta = None;
+        } else if self.dialogo.as_ref().is_some_and(|d| &d.layer == layer) {
             self.cierra_dialogo();
         } else if self.medidor.as_ref() == Some(layer) {
             // la capa que mide los paneles: sin ella, se queda lo último medido
@@ -1187,6 +1324,11 @@ impl LayerShellHandler for App {
         }
         match self.dialogo.as_mut() {
             Some(d) if &d.layer == layer => d.configurado = true,
+            _ if self.etiqueta.as_ref().is_some_and(|e| &e.layer == layer) => {
+                if let Some(e) = self.etiqueta.as_mut() {
+                    e.configurado = true;
+                }
+            }
             _ => self.configurado = true,
         }
     }
@@ -1212,3 +1354,22 @@ impl ProvidesRegistryState for App {
 
 #[cfg(unix)]
 smithay_client_toolkit::delegate_dispatch2!(App);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn la_especie_y_su_nombre() {
+        assert_eq!(parte("michi"), ("michi", None));
+        assert_eq!(parte("michi:Canela"), ("michi", Some("Canela")));
+        assert_eq!(parte("bashira: La Bashi "), ("bashira", Some("La Bashi")));
+        assert_eq!(parte("baba:"), ("baba", None));
+        assert!(especie_de("bashira:Bashira").is_some());
+        assert!(especie_de("perro:Firulais").is_none());
+        assert_eq!(con_nombre("michi:Canela", "Nube"), "michi:Nube");
+        assert_eq!(con_nombre("michi:Canela", "  "), "michi");
+        // sin ":" ni saltos de línea (romperían la lista)
+        assert_eq!(con_nombre("baba", "a:b\nc"), "baba:abc");
+    }
+}

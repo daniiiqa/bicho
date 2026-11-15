@@ -36,6 +36,54 @@ pub fn pide(cmd: &str) -> Value {
     serde_json::from_slice(&out).unwrap_or(Value::Null)
 }
 
+/// Un comando sin respuesta en JSON (un dispatch): ¿dijo "ok"?
+pub fn manda(cmd: &str) -> bool {
+    let Some(path) = socket() else {
+        return false;
+    };
+    let Ok(mut s) = UnixStream::connect(path) else {
+        return false;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
+    if s.write_all(cmd.as_bytes()).is_err() {
+        return false;
+    }
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out);
+    out.starts_with(b"ok")
+}
+
+/// Pone el cursor en (x, y) (coordenadas globales).
+pub fn mueve_cursor(x: f32, y: f32) {
+    if crate::kde::activo() {
+        return;
+    }
+    manda(&format!(
+        "dispatch hl.dsp.cursor.move({{ x = {}, y = {} }})",
+        x.round(),
+        y.round()
+    ));
+}
+
+/// ¿Esa ventana es flotante? (las acomodadas en mosaico no se mueven por
+/// pixeles)
+pub fn flotante(id: &str) -> bool {
+    !crate::kde::activo()
+        && pide("clients").as_array().is_some_and(|a| {
+            a.iter()
+                .any(|c| c["address"].as_str() == Some(id) && c["floating"].as_bool() == Some(true))
+        })
+}
+
+/// Mueve tantito una ventana flotante (relativo).
+pub fn empuja(id: &str, dx: i32, dy: i32) {
+    if id.starts_with("0x") && id[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        manda(&format!(
+            "dispatch hl.dsp.window.move({{ x = {dx}, y = {dy}, relative = true, window = \"address:{id}\" }})"
+        ));
+    }
+}
+
 fn f(v: &Value) -> f32 {
     v.as_f64().unwrap_or(0.0) as f32
 }

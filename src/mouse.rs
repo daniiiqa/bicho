@@ -168,6 +168,9 @@ impl PointerHandler for App {
                         // ocupas ayuda (otro clic: se lo guarda)
                         b.avienta(0.0, 0.0);
                         let der = b.x + b.cw / 2.0 < gx;
+                        // y que se vea cómo se llama
+                        self.mascotas[a.i].muestra_nombre = 2.5;
+                        let b = &mut self.mascotas[a.i].bicho;
                         if !invoca {
                             b.cariño(der);
                         } else if self.dialogo.as_ref().is_some_and(|d| d.i == a.i) {

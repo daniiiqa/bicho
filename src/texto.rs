@@ -117,7 +117,7 @@ pub struct Imagen {
     pub rgb: Vec<u8>,
 }
 
-fn foto((x, y, w, h): Rect) -> Option<Imagen> {
+pub(crate) fn foto((x, y, w, h): Rect) -> Option<Imagen> {
     let g = format!(
         "{},{} {}x{}",
         x.round() as i32,

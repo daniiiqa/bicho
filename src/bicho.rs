@@ -1025,13 +1025,11 @@ impl Bicho {
         self.avisa(der);
     }
 
-    #[cfg_attr(not(windows), allow(dead_code))]
     /// ¿Va tras el cursor?
     pub fn persigue(&self) -> bool {
         self.hace == Hace::Persigue
     }
 
-    #[cfg_attr(not(windows), allow(dead_code))]
     /// Le acercas el cursor para agarrarlo y se te escapa de un brinco
     /// (hacia `der`).
     pub fn esquiva(&mut self, der: bool) {
@@ -1048,7 +1046,6 @@ impl Bicho {
         self.hace = Hace::Vuela;
     }
 
-    #[cfg_attr(not(windows), allow(dead_code))]
     /// Lo dejas en paz tras una travesura: sale corriendo para allá.
     pub fn corre(&mut self, der: bool, cuanto: f32) {
         if !self.libre() {

@@ -11,6 +11,8 @@ correteada. Toman los colores del look (wallust) y cambian solos con él.
 - **michi**: un gato que menea la cola
 - **baba**: anda a brincos y es blandita (se aplasta, se estira, se embarra
   al caer y tiembla como gelatina)
+- **bashira**: una husky dorada de orejas paradas, máscara y pecho blancos y
+  la cola enroscada, que menea al caminar
 - **claudio**: el bichito de Claude, cuadradito y terracota, sin contorno,
   con bracitos, cachetes y un foquito de antena que se mece al caminar. Lo
   hizo Claude, para acordarse ([abajo](#claudio-y-claude-code) lo que sabe
@@ -36,6 +38,29 @@ bicho shell instala  una línea en ~/.bashrc para que se asusten si truena un
 {"pets": ["bicho", "michi", "baba"], "scale": 3, "speed": 1.0,
  "climb": true, "dance": true, "login": false}
 ```
+
+## Nombres
+
+Cada uno puede tener nombre: en la config va como `"michi:Canela"` (o
+`bicho michi:Canela baba` al soltarlos), y desde el menú («ponerles nombre»
+en Linux, «Nombres» en la bandeja de Windows) se los pones o se los quitas.
+El nombre sale en una etiquetita encima de él cuando le pasas el cursor, al
+soltarlos y al darle cariño.
+
+## Caga palos y contraste
+
+**Caga palos** (`"mischief"`, en el menú; viene prendido en Windows y
+apagado en Linux): persiguen más al cursor, brincan con un «!» para
+llamarte la atención, a veces se te escapan si les llegas rápido con el
+mouse, si uno te alcanza persiguiéndote se roba el cursor un ratito (jala
+fuerte y lo suelta), y de vez en cuando uno le da de pisotones a la ventana
+donde anda parado (se hunde tantito y regresa). En Linux los pisotones son
+nomás en ventanas flotantes, y se roban el cursor solo si estaba quieto (en
+Wayland no se sabe si traes un botón apretado); en KDE nomás se escapan.
+
+**Contraste** (`"contrast"`, prendido): si uno se confunde con lo que tiene
+atrás (uno oscuro en una ventana oscura), le sale un halo claro u oscuro. En
+Linux lo de atrás se ve con grim (Hyprland).
 
 ## Entre ellos
 
@@ -226,10 +251,13 @@ terminal.
 Desde una terminal: `bicho off`, `bicho toggle`, `bicho michi baba`,
 `bicho ver`, `bicho actualiza`.
 
+Al bloquear la sesión (Win+L) se duermen y al volver se despiertan
+desperezándose. Con la barra de tareas en auto-ocultar caminan arriba de
+donde sale la barra (para que no los tape).
+
 Allá no hay (todavía): repisas en las letras de las terminales, claudio con
-Claude Code ni las reacciones a discada. En Linux, caga palos se prende con
-`"mischief": true` (persiguen más y brincan para llamarte; las travesuras
-con el cursor y las ventanas son nomás de Windows).
+Claude Code ni las demás reacciones a discada. Y en Linux, todavía no se
+cruzan de una pantalla a otra.
 
 ## Por dentro
 

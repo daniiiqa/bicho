@@ -27,7 +27,9 @@
 mod actualiza;
 mod bandeja;
 mod escritorio;
+mod etiqueta;
 mod musica;
+mod pregunta;
 mod travesuras;
 
 use super::*;
@@ -195,7 +197,7 @@ pub(crate) fn main() {
         }
         Some(_) => {
             let pets = &args[1..];
-            if let Some(malo) = pets.iter().find(|p| arte::especie(p).is_none()) {
+            if let Some(malo) = pets.iter().find(|p| especie_de(p).is_none()) {
                 consola();
                 eprintln!("\nbicho: no conozco a '{malo}'");
                 uso();
@@ -275,11 +277,19 @@ struct Lienzo {
     bits: *mut u8,
     /// pixeles de verdad por cuadrito del dibujo
     px: usize,
+    /// lo que mide (pixeles de verdad)
+    w: usize,
+    h: usize,
 }
 
 impl Lienzo {
+    /// El de un animalito.
     fn new(px: usize) -> Option<Lienzo> {
-        let (w, h) = ((arte::ANCHO * px) as i32, (arte::ALTO * px) as i32);
+        Lienzo::de(arte::ANCHO * px, arte::ALTO * px, px)
+    }
+
+    fn de(ancho: usize, alto: usize, px: usize) -> Option<Lienzo> {
+        let (w, h) = (ancho as i32, alto as i32);
         unsafe {
             let mut bi: BITMAPINFO = std::mem::zeroed();
             bi.bmiHeader = BITMAPINFOHEADER {
@@ -316,12 +326,14 @@ impl Lienzo {
                 bmp,
                 bits: bits as *mut u8,
                 px,
+                w: ancho,
+                h: alto,
             })
         }
     }
 
     fn tam(&self) -> (usize, usize) {
-        (arte::ANCHO * self.px, arte::ALTO * self.px)
+        (self.w, self.h)
     }
 }
 
@@ -357,6 +369,10 @@ pub(crate) struct Mascota {
     halo: Option<u32>,
     /// lo que le falta para poder volver a escaparse del cursor (s)
     pub(crate) escapa_otra: f32,
+    /// cómo se llama (si le pusiste nombre) y cuánto le queda a la etiqueta
+    /// con su nombre (también sale con el cursor encima)
+    pub(crate) nombre: Option<String>,
+    pub(crate) muestra_nombre: f32,
 }
 
 impl Drop for Mascota {
@@ -401,6 +417,8 @@ pub(crate) struct App {
     avisada: Option<String>,
     actualizando: bool,
     cada_revisa: f32,
+    /// la etiqueta con el nombre de alguno
+    etiqueta: Option<etiqueta::Etiqueta>,
 }
 
 fn vive(pets: &[String]) -> Result<(), String> {
@@ -453,7 +471,7 @@ fn vive(pets: &[String]) -> Result<(), String> {
         if !pets.is_empty() {
             cfg.pets = pets.to_vec();
         }
-        let icono = bandeja::icono(arte::especie(&cfg.pets[0]).unwrap_or(arte::todas()[0]));
+        let icono = bandeja::icono(especie_de(&cfg.pets[0]).unwrap_or(arte::todas()[0]));
         let mut app = App {
             mascotas: Vec::new(),
             semilla: SystemTime::now()
@@ -485,9 +503,15 @@ fn vive(pets: &[String]) -> Result<(), String> {
             avisada: None,
             actualizando: false,
             cada_revisa: 30.0,
+            etiqueta: None,
         };
         app.crea();
         bandeja::pon(control, icono);
+        // que avise cuando bloqueas la sesión (Win+L): a dormir
+        windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(
+            control,
+            windows_sys::Win32::System::RemoteDesktop::NOTIFY_FOR_THIS_SESSION,
+        );
         APP.with(|a| *a.borrow_mut() = Some(app));
         SetTimer(control, TIMER, CUADRO.as_millis() as u32, None);
         let mut msg: MSG = std::mem::zeroed();
@@ -544,6 +568,20 @@ unsafe extern "system" fn ventana_control(h: HWND, msg: u32, wp: WPARAM, lp: LPA
             }
             0
         }
+        // bloqueaste la sesión: a dormir; volviste: se despiertan contentos
+        // (como con chapa en Linux)
+        WM_WTSSESSION_CHANGE => {
+            match wp as u32 {
+                WTS_SESSION_LOCK => {
+                    con_app(|a| a.mascotas.iter_mut().for_each(|p| p.bicho.a_dormir()));
+                }
+                WTS_SESSION_UNLOCK => {
+                    con_app(|a| a.mascotas.iter_mut().for_each(|p| p.bicho.despierta()));
+                }
+                _ => {}
+            }
+            0
+        }
         WM_CLOSE => {
             unsafe { DestroyWindow(h) };
             0
@@ -585,9 +623,41 @@ fn menu(control: HWND) {
             std::ptr::null(),
         );
         DestroyMenu(m);
-        if cmd > 0 {
-            con_app(|a| a.orden(cmd as usize));
+        let cmd = cmd as usize;
+        if let Some(i) = bandeja::es_nombre(cmd) {
+            pon_nombre(i);
+        } else if cmd > 0 {
+            con_app(|a| a.orden(cmd));
         }
+    }
+}
+
+/// Le pones nombre al `i` (la cajita se abre sin agarrar la App, para que
+/// sigan andando mientras escribes).
+fn pon_nombre(i: usize) {
+    let Some((especie, actual, centro, escala)) = con_app(|a| {
+        let p = a.mascotas.get(i)?;
+        let ps = a.pantallas.get(p.mon)?;
+        let centro = ((ps.rect.0 + ps.rect.2) / 2, (ps.rect.1 + ps.rect.3) / 2);
+        Some((
+            p.especie.nombre,
+            p.nombre.clone().unwrap_or_default(),
+            centro,
+            ps.escala,
+        ))
+    })
+    .flatten() else {
+        return;
+    };
+    let es = bandeja::es();
+    let mensaje = if es {
+        format!("¿Cómo se llama {especie}? (vacío: sin nombre)")
+    } else {
+        format!("What's {especie}'s name? (empty: no name)")
+    };
+    let titulo = if es { "Ponerle nombre" } else { "Name it" };
+    if let Some(nuevo) = pregunta::pregunta(titulo, &mensaje, &actual, centro, escala) {
+        con_app(|a| a.nombra(i, &nuevo));
     }
 }
 
@@ -636,8 +706,8 @@ impl App {
             .unwrap_or(0);
         let px = self.px_en(mon);
         let ancho = self.pantallas.get(mon).map_or(1920.0, |p| p.tam.0);
-        for (i, nombre) in self.cfg.pets.clone().iter().enumerate() {
-            let Some(especie) = arte::especie(nombre) else {
+        for (i, entrada) in self.cfg.pets.clone().iter().enumerate() {
+            let Some(especie) = especie_de(entrada) else {
                 continue;
             };
             let Some(lienzo) = Lienzo::new(px) else {
@@ -671,6 +741,9 @@ impl App {
                 visible: false,
                 halo: None,
                 escapa_otra: 0.0,
+                nombre: parte(entrada).1.map(String::from),
+                // al salir, que se vea cómo se llaman
+                muestra_nombre: 3.0,
             });
         }
     }
@@ -684,6 +757,7 @@ impl App {
             self.acaba(t);
         }
         self.juego = None;
+        self.etiqueta = None;
         self.mascotas.clear();
         self.crea();
     }
@@ -822,10 +896,11 @@ impl App {
         let b = &mut self.mascotas[a.i].bicho;
         let (x0, y0, t0) = a.inicio;
         if (gx - x0).hypot(gy - y0) < 6.0 && t0.elapsed() < Duration::from_millis(350) {
-            // fue un clic: cariño
+            // fue un clic: cariño (y que se vea cómo se llama)
             b.avienta(0.0, 0.0);
             let der = b.x + b.cw / 2.0 < gx;
             b.cariño(der);
+            self.mascotas[a.i].muestra_nombre = 2.5;
             return;
         }
         let ahora = Instant::now();
@@ -993,6 +1068,7 @@ impl App {
                 _ => self.esconde(i),
             }
         }
+        self.tick_etiqueta(dt);
     }
 
     /// Lo que no urge (cada 0.4 s): las pantallas, los colores, la pantalla

@@ -39,6 +39,12 @@ const BAILA: usize = 403;
 const CONTRASTE: usize = 404;
 const TRAVIESO: usize = 405;
 const ACTUALIZA: usize = 406;
+const NOMBRE: usize = 500;
+
+/// ¿Es "ponerle nombre" a alguno? Cuál.
+pub(crate) fn es_nombre(cmd: usize) -> Option<usize> {
+    (NOMBRE..NOMBRE + 100).contains(&cmd).then(|| cmd - NOMBRE)
+}
 const TAMANOS: [u32; 5] = [2, 3, 4, 5, 6];
 
 /// ¿Windows está en español?
@@ -228,7 +234,12 @@ impl App {
         unsafe {
             let m = CreatePopupMenu();
             for (i, e) in arte::todas().iter().enumerate() {
-                let n = self.cfg.pets.iter().filter(|p| *p == e.nombre).count();
+                let n = self
+                    .cfg
+                    .pets
+                    .iter()
+                    .filter(|p| crate::parte(p).0 == e.nombre)
+                    .count();
                 let flags = MF_STRING | if n > 0 { MF_CHECKED } else { 0 };
                 let nombre = if n > 1 {
                     format!("{} ×{n}", e.nombre)
@@ -242,6 +253,16 @@ impl App {
                 agrega(otro, MF_STRING, OTRO + i, e.nombre);
             }
             agrega(m, MF_POPUP, otro as usize, t("Uno más", "One more"));
+            // ponerles nombre: cada uno de los que andan
+            let nombres = CreatePopupMenu();
+            for (i, p) in self.mascotas.iter().enumerate() {
+                let texto = match &p.nombre {
+                    Some(n) => format!("{n} ({})", p.especie.nombre),
+                    None => format!("{} — {}", p.especie.nombre, t("sin nombre", "no name")),
+                };
+                agrega(nombres, MF_STRING, NOMBRE + i, &texto);
+            }
+            agrega(m, MF_POPUP, nombres as usize, t("Nombres", "Names"));
             agrega(m, MF_SEPARATOR, 0, "");
             let tam = CreatePopupMenu();
             for (i, n) in TAMANOS.iter().enumerate() {
@@ -341,10 +362,11 @@ impl App {
             }
             c if (ESPECIE..ESPECIE + todas.len()).contains(&c) => {
                 let nombre = todas[c - ESPECIE].nombre.to_string();
-                if pets.contains(&nombre) {
+                let es_de = |p: &String| crate::parte(p).0 == nombre;
+                if pets.iter().any(es_de) {
                     // que quede al menos uno
-                    if pets.iter().any(|p| *p != nombre) {
-                        pets.retain(|p| *p != nombre);
+                    if pets.iter().any(|p| !es_de(p)) {
+                        pets.retain(|p| !es_de(p));
                     }
                 } else {
                     pets.push(nombre);
@@ -372,7 +394,7 @@ impl App {
 }
 
 /// Escribe la config (lo que no se toca aquí, se queda como estaba).
-fn guarda_config(cfg: &crate::Config) {
+pub(crate) fn guarda_config(cfg: &crate::Config) {
     let archivo = crate::config_dir().join("config.json");
     let mut v: Value = std::fs::read(&archivo)
         .ok()

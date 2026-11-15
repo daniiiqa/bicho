@@ -17,12 +17,16 @@ const I_MUSIC: &str = "\u{f075a}";
 const I_LOGIN: &str = "\u{f0342}";
 const I_MAS: &str = "\u{f0415}";
 const I_MENOS: &str = "\u{f0374}";
+const I_NOMBRE: &str = "\u{f04f9}";
+const I_TRAVIESO: &str = "\u{f0a7a}";
+const I_CONTRASTE: &str = "\u{f0765}";
 
-fn icono(especie: &str) -> &'static str {
-    match especie {
+fn icono(entrada: &str) -> &'static str {
+    match crate::parte(entrada).0 {
         "michi" => "\u{f011b}",
         "baba" => "\u{f058c}",
         "claudio" => "\u{f0674}",
+        "bashira" => "\u{f0a43}",
         _ => "\u{f00e4}",
     }
 }
@@ -379,42 +383,109 @@ pub fn menu() -> i32 {
         let trepa = v["climb"].as_bool().unwrap_or(true);
         let baila = v["dance"].as_bool().unwrap_or(true);
         let login = v["login"].as_bool().unwrap_or(false);
-        let filas = vec![
-            format!(
-                "{I_POWER}  {}",
-                if sueltos {
-                    l.t("andan sueltos — guardarlos", "out and about — put away")
-                } else {
-                    l.t("guardados — soltarlos", "put away — let them out")
-                }
+        let travieso = v["mischief"].as_bool().unwrap_or(false);
+        let contraste = v["contrast"].as_bool().unwrap_or(true);
+        let quienes_son: Vec<String> = lista.iter().map(|p| bonito(p)).collect();
+        // (lo que hace cada fila, para no depender de su número)
+        #[derive(PartialEq)]
+        enum Fila {
+            Suelta,
+            Quienes,
+            Nombres,
+            Velocidad,
+            Tamano,
+            Trepa,
+            Baila,
+            Travieso,
+            Contraste,
+            Login,
+            Cierra,
+        }
+        let filas: Vec<(String, Fila)> = vec![
+            (
+                format!(
+                    "{I_POWER}  {}",
+                    if sueltos {
+                        l.t("andan sueltos — guardarlos", "out and about — put away")
+                    } else {
+                        l.t("guardados — soltarlos", "put away — let them out")
+                    }
+                ),
+                Fila::Suelta,
             ),
-            format!("{I_PAW}  {}: {} ›", l.t("quiénes", "who"), lista.join(", ")),
-            format!("{I_SPEED}  {}: {vel}×", l.t("velocidad", "speed")),
-            format!("{I_SIZE}  {}: {tam}", l.t("tamaño", "size")),
-            format!(
-                "{I_LADDER}  {}: {}",
-                l.t("trepan ventanas", "climb windows"),
-                l.si(trepa)
+            (
+                format!(
+                    "{I_PAW}  {}: {} ›",
+                    l.t("quiénes", "who"),
+                    quienes_son.join(", ")
+                ),
+                Fila::Quienes,
             ),
-            format!(
-                "{I_MUSIC}  {}: {}",
-                l.t("bailan con música", "dance to music"),
-                l.si(baila)
+            (
+                format!("{I_NOMBRE}  {} ›", l.t("ponerles nombre", "name them")),
+                Fila::Nombres,
             ),
-            format!(
-                "{I_LOGIN}  {}: {}",
-                l.t("al iniciar sesión", "at login"),
-                l.si(login)
+            (
+                format!("{I_SPEED}  {}: {vel}×", l.t("velocidad", "speed")),
+                Fila::Velocidad,
             ),
-            format!("‹ {}", l.t("cerrar", "close")),
+            (
+                format!("{I_SIZE}  {}: {tam}", l.t("tamaño", "size")),
+                Fila::Tamano,
+            ),
+            (
+                format!(
+                    "{I_LADDER}  {}: {}",
+                    l.t("trepan ventanas", "climb windows"),
+                    l.si(trepa)
+                ),
+                Fila::Trepa,
+            ),
+            (
+                format!(
+                    "{I_MUSIC}  {}: {}",
+                    l.t("bailan con música", "dance to music"),
+                    l.si(baila)
+                ),
+                Fila::Baila,
+            ),
+            (
+                format!(
+                    "{I_TRAVIESO}  {}: {}",
+                    l.t("caga palos", "troublemakers"),
+                    l.si(travieso)
+                ),
+                Fila::Travieso,
+            ),
+            (
+                format!(
+                    "{I_CONTRASTE}  {}: {}",
+                    l.t("contraste (que no se pierdan)", "contrast (don't get lost)"),
+                    l.si(contraste)
+                ),
+                Fila::Contraste,
+            ),
+            (
+                format!(
+                    "{I_LOGIN}  {}: {}",
+                    l.t("al iniciar sesión", "at login"),
+                    l.si(login)
+                ),
+                Fila::Login,
+            ),
+            (format!("‹ {}", l.t("cerrar", "close")), Fila::Cierra),
         ];
+        let textos: Vec<String> = filas.iter().map(|f| f.0.clone()).collect();
         let mesg = l.t("los animalitos de discada", "discada's little critters");
-        let Some(i) = pick("bicho", mesg, &filas, fila) else {
+        let Some(i) = pick("bicho", mesg, &textos, fila) else {
             return 0;
         };
         fila = i;
-        match i {
-            0 => {
+        let Some((_, que)) = filas.get(i) else {
+            return 0;
+        };
+        match que {
+            Fila::Suelta => {
                 if sueltos {
                     super::guarda();
                 } else {
@@ -427,26 +498,148 @@ pub fn menu() -> i32 {
                     }
                     std::thread::sleep(std::time::Duration::from_millis(25));
                 }
+                continue;
             }
-            1 => {
+            Fila::Quienes => {
                 quienes(&l);
                 continue;
             }
-            2 => v["speed"] = json!(siguiente(&[0.5, 1.0, 1.5, 2.0], vel)),
-            3 => v["scale"] = json!(siguiente(&[2.0, 3.0, 4.0, 5.0], tam) as u64),
-            4 => v["climb"] = json!(!trepa),
-            5 => v["dance"] = json!(!baila),
-            6 => {
+            Fila::Nombres => {
+                nombres(&l);
+                continue;
+            }
+            Fila::Velocidad => v["speed"] = json!(siguiente(&[0.5, 1.0, 1.5, 2.0], vel)),
+            Fila::Tamano => v["scale"] = json!(siguiente(&[2.0, 3.0, 4.0, 5.0], tam) as u64),
+            Fila::Trepa => v["climb"] = json!(!trepa),
+            Fila::Baila => v["dance"] = json!(!baila),
+            Fila::Travieso => v["mischief"] = json!(!travieso),
+            Fila::Contraste => v["contrast"] = json!(!contraste),
+            Fila::Login => {
                 v["login"] = json!(!login);
                 guarda(&v);
                 continue;
             }
-            _ => return 0,
+            Fila::Cierra => return 0,
         }
-        if (2..=5).contains(&i) {
-            guarda(&v);
-            relanza(&lista);
+        guarda(&v);
+        relanza(&lista);
+    }
+}
+
+/// "michi:Canela" → "Canela (michi)"; sin nombre, nomás la especie.
+fn bonito(entrada: &str) -> String {
+    match crate::parte(entrada) {
+        (e, Some(n)) => format!("{n} ({e})"),
+        (e, None) => e.to_string(),
+    }
+}
+
+/// Ponerle nombre a uno de los que andan (o de los de la config).
+fn nombres(l: &L) {
+    let mut fila = 0;
+    loop {
+        let mut v = lee();
+        let mut lista = pets(&v);
+        let mut filas: Vec<String> = lista
+            .iter()
+            .map(|p| {
+                let nombre = crate::parte(p)
+                    .1
+                    .map_or_else(|| l.t("sin nombre", "no name").to_string(), String::from);
+                format!("{}  {}: {nombre}", icono(p), crate::parte(p).0)
+            })
+            .collect();
+        filas.push(format!("‹ {}", l.t("volver", "back")));
+        let Some(i) = pick(
+            l.t("nombres", "names"),
+            l.t("¿a quién le pones nombre?", "who gets a name?"),
+            &filas,
+            fila,
+        ) else {
+            return;
+        };
+        fila = i;
+        let Some(entrada) = lista.get(i).cloned() else {
+            return;
+        };
+        let (especie, actual) = crate::parte(&entrada);
+        let mesg = if l.0 {
+            format!("¿cómo se llama {especie}? (vacío: sin nombre)")
+        } else {
+            format!("what's {especie}'s name? (empty: no name)")
+        };
+        let Some(nuevo) = pide_texto(l.t("nombre", "name"), &mesg, actual.unwrap_or("")) else {
+            continue;
+        };
+        lista[i] = crate::con_nombre(&entrada, &nuevo);
+        v["pets"] = json!(lista);
+        guarda(&v);
+        relanza(&lista);
+    }
+}
+
+/// Que escribas algo (el nombre): jale como siempre, o lo que haya. None si
+/// lo cerraste; Some("") si lo dejaste vacío.
+fn pide_texto(prompt: &str, mesg: &str, actual: &str) -> Option<String> {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let jale = super::home(".local/bin/jale");
+    if jale.is_file() {
+        let rasi = super::home(".config/jale/config-edit.rasi");
+        let mut a = s(&["-dmenu", "-p", prompt, "-mesg", mesg, "-format", "s"]);
+        if !actual.is_empty() {
+            a.extend(s(&["-filter", actual]));
         }
+        if rasi.exists() {
+            a.push("-config".into());
+            a.push(rasi.display().to_string());
+        }
+        return corre(&jale.display().to_string(), &a, Some(""));
+    }
+    let kde = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.to_uppercase().contains("KDE"));
+    let mut orden = vec!["rofi", "fuzzel", "wofi", "kdialog", "zenity"];
+    if kde {
+        orden.retain(|m| *m != "kdialog");
+        orden.insert(0, "kdialog");
+    }
+    let m = orden.into_iter().find(|m| hay(m))?;
+    match m {
+        "rofi" => {
+            let mut a = s(&["-dmenu", "-p", prompt, "-mesg", mesg, "-format", "s"]);
+            if !actual.is_empty() {
+                a.extend(s(&["-filter", actual]));
+            }
+            corre(m, &a, Some(""))
+        }
+        "fuzzel" => corre(
+            m,
+            &s(&[
+                "--dmenu",
+                "--lines",
+                "0",
+                "--prompt",
+                &format!("{prompt}> "),
+            ]),
+            Some(""),
+        ),
+        "wofi" => corre(m, &s(&["--dmenu", "--prompt", prompt]), Some("")),
+        "kdialog" => corre(
+            m,
+            &s(&["--title", "bicho", "--inputbox", mesg, actual]),
+            None,
+        ),
+        _ => corre(
+            m,
+            &s(&[
+                "--entry",
+                "--title",
+                "bicho",
+                "--text",
+                mesg,
+                "--entry-text",
+                actual,
+            ]),
+            None,
+        ),
     }
 }
 

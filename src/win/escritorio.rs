@@ -24,9 +24,10 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowTextW, IsIconic, IsWindowVisible, MONITORINFOF_PRIMARY,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    EnumWindows, FindWindowExW, GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, IsIconic,
+    IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, WS_CAPTION, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 
 /// Una pantalla.
@@ -86,6 +87,9 @@ pub(crate) fn pantallas() -> Vec<Pantalla> {
             GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
             let escala = (dx.max(96) as f32 / 96.0).max(1.0);
             let (m, t) = (info.rcMonitor, info.rcWork);
+            // con la barra en auto-ocultar el área de trabajo es toda la
+            // pantalla: lo que mide la barra se ve en su ventana
+            let (barra_abajo, barra_arriba) = barras(&m);
             Some((
                 info.dwFlags & MONITORINFOF_PRIMARY != 0,
                 Pantalla {
@@ -95,14 +99,51 @@ pub(crate) fn pantallas() -> Vec<Pantalla> {
                         (m.bottom - m.top) as f32 / escala,
                     ),
                     escala,
-                    abajo: (m.bottom - t.bottom).max(0) as f32 / escala,
-                    arriba: (t.top - m.top).max(0) as f32 / escala,
+                    abajo: (m.bottom - t.bottom).max(barra_abajo).max(0) as f32 / escala,
+                    arriba: (t.top - m.top).max(barra_arriba).max(0) as f32 / escala,
                 },
             ))
         })
         .collect();
     v.sort_by_key(|(principal, p)| (!principal, p.rect.0, p.rect.1));
     v.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Lo que miden las barras de tareas pegadas abajo y arriba de esa pantalla
+/// (pixeles de verdad), aunque estén escondidas (auto-ocultar): escondida,
+/// la barra se sale casi toda por la orilla, pero sigue midiendo lo mismo.
+/// Así nunca caminan donde la barra va a salir (y los taparía).
+fn barras(m: &RECT) -> (i32, i32) {
+    let (mut abajo, mut arriba) = (0, 0);
+    for clase in ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"] {
+        let c = w(clase);
+        let mut h: HWND = std::ptr::null_mut();
+        loop {
+            h = unsafe { FindWindowExW(std::ptr::null_mut(), h, c.as_ptr(), std::ptr::null()) };
+            if h.is_null() {
+                break;
+            }
+            let mut r: RECT = unsafe { std::mem::zeroed() };
+            unsafe { GetWindowRect(h, &mut r) };
+            let grueso = r.bottom - r.top;
+            // de lado a lado de esta pantalla (las de los lados no cuentan)
+            let ancha = (r.left - m.left).abs() <= 4 && (r.right - m.right).abs() <= 4;
+            if !ancha || grueso <= 0 || grueso > (m.bottom - m.top) / 3 {
+                continue;
+            }
+            let medio = (m.top + m.bottom) / 2;
+            if r.top >= medio && r.top <= m.bottom {
+                abajo = abajo.max(grueso);
+            } else if r.bottom <= medio && r.bottom >= m.top {
+                arriba = arriba.max(grueso);
+            }
+        }
+    }
+    (abajo, arriba)
+}
+
+fn w(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain([0]).collect()
 }
 
 /// En qué pantalla está ese punto (pixeles de verdad).
@@ -359,6 +400,12 @@ pub(crate) fn cursor() -> Option<(i32, i32)> {
 pub(crate) fn completa_en(ps: &[Pantalla]) -> Option<usize> {
     let fg = unsafe { GetForegroundWindow() };
     if fg.is_null() || NO_CUENTAN.contains(&clase(fg).as_str()) {
+        return None;
+    }
+    // una maximizada (con su barra de título) no es pantalla completa,
+    // aunque con la barra de tareas escondida cubra toda la pantalla
+    let estilo = unsafe { GetWindowLongPtrW(fg, GWL_STYLE) } as u32;
+    if unsafe { IsZoomed(fg) } != 0 && estilo & WS_CAPTION == WS_CAPTION {
         return None;
     }
     let mut r: RECT = unsafe { std::mem::zeroed() };
