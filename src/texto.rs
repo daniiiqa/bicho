@@ -42,18 +42,7 @@ pub struct Pedido {
     pub cuerpo: (f32, f32, f32),
 }
 
-/// Donde se puede parar: `y` es la del lienzo parado ahí, y `x0..x1` las x
-/// del lienzo que caben, contando desde la esquina de la ventana (así, si la
-/// mueves, las repisas se van con ella).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Repisa {
-    pub y: f32,
-    pub x0: f32,
-    pub x1: f32,
-    /// arriba hay hueco para su cuerpo (solitos solo se paran en estas; si
-    /// tú lo pones en otra línea, ahí se queda)
-    pub cabe: bool,
-}
+pub use crate::mundo::Repisa;
 
 #[derive(Default)]
 pub struct Estado {

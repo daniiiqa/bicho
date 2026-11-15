@@ -27,57 +27,94 @@
 //! brincan en las letras). Reaccionan a discada y a su terminal
 //! (reacciones.rs). ~/.config/bicho/<especie>.txt les cambia el dibujo.
 
-mod actualiza;
+// en Windows, sin consola negra al darle doble clic (win/mod.rs la pide
+// prestada cuando lo corres desde una)
+#![cfg_attr(windows, windows_subsystem = "windows")]
+// en Windows no se usa lo de las terminales, Claude ni el globo
+#![cfg_attr(windows, allow(dead_code))]
+
 mod arte;
 mod bicho;
-mod claude;
-mod claudio;
-mod dialogo;
-mod globo;
-mod hypr;
 mod juego;
+mod mundo;
+
+#[cfg(unix)]
+mod actualiza;
+#[cfg(unix)]
+mod claude;
+#[cfg(unix)]
+mod claudio;
+#[cfg(unix)]
+mod dialogo;
+#[cfg(unix)]
+mod globo;
+#[cfg(unix)]
+mod hypr;
+#[cfg(unix)]
 mod kde;
+#[cfg(unix)]
 mod menu;
+#[cfg(unix)]
 mod mouse;
+#[cfg(unix)]
 mod reacciones;
+#[cfg(unix)]
 mod shell;
+#[cfg(unix)]
 mod texto;
+#[cfg(unix)]
 mod ventanas;
+// Windows: sus ventanas, su bandeja y su propio App (win/mod.rs)
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+use win::App;
 
 use serde_json::Value;
-use smithay_client_toolkit::reexports::calloop::EventLoop;
-use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
-use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
-use smithay_client_toolkit::reexports::client::protocol::{
-    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
-};
-use smithay_client_toolkit::reexports::client::{Connection, Dispatch, QueueHandle};
-use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState, Region},
-    delegate_registry,
-    output::{OutputHandler, OutputState},
-    registry::{ProvidesRegistryState, RegistryState},
-    registry_handlers,
-    seat::{
-        Capability, SeatHandler, SeatState,
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
-    },
-    shell::{
-        WaylandSurface,
-        wlr_layer::{
-            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
-            LayerSurfaceConfigure,
+#[cfg(unix)]
+mod wl {
+    #![allow(unused_imports)]
+    pub(crate) use smithay_client_toolkit::reexports::calloop::EventLoop;
+    pub(crate) use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
+    pub(crate) use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
+    pub(crate) use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
+    pub(crate) use smithay_client_toolkit::reexports::client::protocol::{
+        wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
+    };
+    pub(crate) use smithay_client_toolkit::reexports::client::{Connection, Dispatch, QueueHandle};
+    pub(crate) use smithay_client_toolkit::{
+        compositor::{CompositorHandler, CompositorState, Region},
+        delegate_registry,
+        output::{OutputHandler, OutputState},
+        registry::{ProvidesRegistryState, RegistryState},
+        registry_handlers,
+        seat::{
+            Capability, SeatHandler, SeatState,
+            pointer::{PointerEvent, PointerEventKind, PointerHandler},
         },
-    },
-    shm::{Shm, ShmHandler, slot::SlotPool},
-};
-use std::collections::{HashMap, VecDeque};
+        shell::{
+            WaylandSurface,
+            wlr_layer::{
+                Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+                LayerSurfaceConfigure,
+            },
+        },
+        shm::{Shm, ShmHandler, slot::SlotPool},
+    };
+}
+#[cfg(unix)]
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
+#[cfg(unix)]
+use wl::*;
 
 /// un cuadro cuando nomás andan caminando
 const CUADRO: Duration = Duration::from_millis(33);
@@ -86,20 +123,34 @@ const CUADRO: Duration = Duration::from_millis(33);
 const CUADRO_RAPIDO: Duration = Duration::from_millis(16);
 /// y cuando todos están quietos (sentados, parados, dormidos)
 const CUADRO_QUIETO: Duration = Duration::from_millis(100);
+#[cfg(unix)]
 const BOTON_IZQ: u32 = 0x110;
 
+#[cfg(unix)]
 fn runtime() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from)
 }
+#[cfg(unix)]
 fn pidfile() -> PathBuf {
     runtime().join("bicho.pid")
 }
 fn home(p: &str) -> PathBuf {
-    std::env::var_os("HOME")
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map_or_else(PathBuf::new, PathBuf::from)
         .join(p)
 }
 
+/// Donde va la config y los disfraces: ~/.config/bicho, o en Windows
+/// %APPDATA%\bicho.
+fn config_dir() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(d) = std::env::var_os("APPDATA") {
+        return PathBuf::from(d).join("bicho");
+    }
+    home(".config/bicho")
+}
+
+#[cfg(unix)]
 fn running() -> Option<i32> {
     let pid: i32 = std::fs::read_to_string(pidfile())
         .ok()?
@@ -109,6 +160,7 @@ fn running() -> Option<i32> {
     vivo(pid).then_some(pid)
 }
 
+#[cfg(unix)]
 /// Que sea un bicho y que no sea zombi: el menú es el papá de los que suelta
 /// y uno guardado se quedaba de zombi mientras el menú seguía abierto (y el
 /// menú creía que seguían sueltos: ya no los dejaba salir).
@@ -124,6 +176,10 @@ fn vivo(pid: i32) -> bool {
 }
 
 fn logfile() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(d) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(d).join("bicho/bicho.log");
+    }
     home(".local/state/bicho/bicho.log")
 }
 
@@ -151,10 +207,17 @@ fn bitacora(linea: &str) {
     }
 }
 
+#[cfg(unix)]
 fn petsfile() -> PathBuf {
     runtime().join("bicho.pets")
 }
 
+#[cfg(windows)]
+fn main() {
+    win::main()
+}
+
+#[cfg(unix)]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let resto = &args[args.len().min(2)..];
@@ -221,6 +284,7 @@ fn main() {
     std::process::exit(code);
 }
 
+#[cfg(unix)]
 fn uso() {
     let nombres: Vec<_> = arte::todas().iter().map(|e| e.nombre).collect();
     eprintln!(
@@ -230,6 +294,7 @@ fn uso() {
     );
 }
 
+#[cfg(unix)]
 /// Los que andan sueltos ahorita.
 fn andando() -> Option<Vec<String>> {
     running()?;
@@ -237,6 +302,7 @@ fn andando() -> Option<Vec<String>> {
     Some(s.split_whitespace().map(String::from).collect())
 }
 
+#[cfg(unix)]
 fn suelta(pets: &[String]) -> i32 {
     if let Some(malo) = pets.iter().find(|p| arte::especie(p).is_none()) {
         eprintln!("bicho: no conozco a '{malo}'");
@@ -283,6 +349,7 @@ fn suelta(pets: &[String]) -> i32 {
     }
 }
 
+#[cfg(unix)]
 fn guarda() -> i32 {
     if let Some(pid) = running() {
         unsafe { libc::kill(pid, libc::SIGTERM) };
@@ -381,7 +448,7 @@ struct Config {
 }
 
 fn config() -> Config {
-    let v: Value = std::fs::read(home(".config/bicho/config.json"))
+    let v: Value = std::fs::read(config_dir().join("config.json"))
         .ok()
         .and_then(|d| serde_json::from_slice(&d).ok())
         .unwrap_or(Value::Null);
@@ -407,6 +474,11 @@ fn config() -> Config {
 }
 
 fn colores_path() -> PathBuf {
+    // en Windows no hay wallust: si quieres, pones ahí unos colores con
+    // las mismas claves
+    if cfg!(windows) {
+        return config_dir().join("colors.json");
+    }
     home(".config/empalme/colors.json")
 }
 
@@ -456,6 +528,7 @@ fn mtime(p: &PathBuf) -> Option<SystemTime> {
     std::fs::metadata(p).and_then(|m| m.modified()).ok()
 }
 
+#[cfg(unix)]
 /// ¿Está sonando algo? (playerctl, cada 2 s, en su hilo)
 fn oye_musica(suena: Arc<AtomicBool>) {
     std::thread::spawn(move || {
@@ -475,6 +548,7 @@ fn oye_musica(suena: Arc<AtomicBool>) {
     });
 }
 
+#[cfg(unix)]
 fn es_de_noche() -> bool {
     let hora = unsafe {
         let t = libc::time(std::ptr::null_mut());
@@ -485,6 +559,7 @@ fn es_de_noche() -> bool {
     !(6..23).contains(&hora)
 }
 
+#[cfg(unix)]
 /// Un animalito en pantalla: su capa y su cabeza.
 struct Mascota {
     especie: &'static arte::Especie,
@@ -528,6 +603,7 @@ fn cuerpo(e: &'static arte::Especie, celda: f32) -> (f32, f32, f32) {
     )
 }
 
+#[cfg(unix)]
 struct App {
     registry: RegistryState,
     output: OutputState,
@@ -600,6 +676,7 @@ struct App {
     exit: bool,
 }
 
+#[cfg(unix)]
 impl App {
     fn crea(&mut self, output: wl_output::WlOutput) {
         if !self.mascotas.is_empty() {
@@ -889,6 +966,7 @@ impl App {
     }
 }
 
+#[cfg(unix)]
 fn run(pets: &[String]) -> Result<(), String> {
     std::panic::set_hook(Box::new(|info| bitacora(&format!("tronó: {info}"))));
     texto::memoria_ajustada();
@@ -915,6 +993,7 @@ fn run(pets: &[String]) -> Result<(), String> {
     r
 }
 
+#[cfg(unix)]
 fn vive(cfg: Config) -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("Wayland: {e}"))?;
     let (globals, queue) = registry_queue_init(&conn).map_err(|e| format!("Wayland: {e}"))?;
@@ -1000,6 +1079,7 @@ fn vive(cfg: Config) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
 impl CompositorHandler for App {
     fn scale_factor_changed(
         &mut self,
@@ -1042,6 +1122,7 @@ impl CompositorHandler for App {
     }
 }
 
+#[cfg(unix)]
 impl OutputHandler for App {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output
@@ -1066,6 +1147,7 @@ impl OutputHandler for App {
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
+#[cfg(unix)]
 impl LayerShellHandler for App {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
         if self.dialogo.as_ref().is_some_and(|d| &d.layer == layer) {
@@ -1101,14 +1183,17 @@ impl LayerShellHandler for App {
     }
 }
 
+#[cfg(unix)]
 impl ShmHandler for App {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
     }
 }
 
+#[cfg(unix)]
 delegate_registry!(App);
 
+#[cfg(unix)]
 impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry
@@ -1116,4 +1201,5 @@ impl ProvidesRegistryState for App {
     registry_handlers![OutputState, SeatState];
 }
 
+#[cfg(unix)]
 smithay_client_toolkit::delegate_dispatch2!(App);

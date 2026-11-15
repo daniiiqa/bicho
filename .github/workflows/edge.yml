@@ -43,3 +43,24 @@ jobs:
               --notes "El último commit de la rama principal, compilado para discada (x86_64). Lo baja install.sh."
           gh release upload edge "$APP-x86_64-linux" "$APP-x86_64-linux.sha256" --clobber
           gh release upload edge "$APP.commit" --clobber
+
+  # El .exe para Windows (bicho-x86_64-windows.exe), a la misma release.
+  # Después del de Linux: ese es el que crea la release y mueve el tag.
+  windows:
+    needs: edge
+    runs-on: windows-latest
+    env:
+      APP: ${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: publicar
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "target/release/$APP.exe" "$APP-x86_64-windows.exe"
+          sha256sum "$APP-x86_64-windows.exe" > "$APP-x86_64-windows.exe.sha256"
+          gh release upload edge "$APP-x86_64-windows.exe" "$APP-x86_64-windows.exe.sha256" --clobber

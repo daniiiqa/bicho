@@ -270,8 +270,7 @@ pub fn especie(nombre: &str) -> Option<&'static Especie> {
 pub fn todas() -> &'static [&'static Especie] {
     static D: std::sync::OnceLock<Vec<&'static Especie>> = std::sync::OnceLock::new();
     D.get_or_init(|| {
-        let dir =
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config/bicho"));
+        let dir = Some(crate::config_dir());
         TODAS
             .iter()
             .map(|&e| {

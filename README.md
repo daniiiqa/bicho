@@ -180,6 +180,35 @@ Si algo no sale, `BICHO_DEBUG=1 bicho` escribe cada 2 s en
 `$XDG_RUNTIME_DIR/bicho/debug.txt` lo que sabe del mundo y dónde anda cada
 quien.
 
+## En Windows
+
+También andan en Windows 10 y 11: bájate `bicho-x86_64-windows.exe` de la
+[release edge](../../releases/tag/edge) y dale doble clic. No se instala
+nada. La primera vez Windows avisa que no conoce al programa (no está
+firmado): «Más información» → «Ejecutar de todas formas».
+
+Hacen lo mismo que en Linux: caminan por arriba de la barra de tareas, trepan
+y se pasean por las ventanas (solo por la orilla que se ve, si otra la
+tapa), se duermen, juegan a la correteada y se saludan. También los agarras,
+los avientas y les das cariño con un clic. Para meterlos a una ventana,
+suéltalos con **Ctrl** apretado: ahí viven, y si otra ventana la tapa, los
+tapa también. Si algo está en pantalla completa (un juego, un video), se
+esconden.
+
+El menú es el ícono junto al reloj: qué animalitos andan (y uno más), el
+tamaño, si trepan, si arrancan con Windows, y guardarlos. Habla español o
+inglés, según Windows. Lo que cambies se guarda en
+`%APPDATA%\bicho\config.json`. Ahí también van los disfraces
+(`<especie>.txt`) y, si quieres otros colores, un `colors.json` con las
+mismas claves que el de wallust. Si algo truena, queda en
+`%LOCALAPPDATA%\bicho\bicho.log`.
+
+Desde una terminal: `bicho off`, `bicho toggle`, `bicho michi baba`,
+`bicho ver`.
+
+Allá no hay (todavía): repisas en las letras de las terminales, claudio con
+Claude Code, las reacciones a discada ni el baile con música.
+
 ## Por dentro
 
 Son capas de layer-shell (`Layer::Top`) cuya región de input es nomás el
@@ -188,3 +217,11 @@ cuerpo del animalito: el resto deja pasar el mouse. En discada la capa
 Las ventanas, el cursor y las barras los lee del socket de Hyprland; sin
 Hyprland solo hay piso. Si algo truena queda en
 `~/.local/state/bicho/bicho.log`.
+
+En Windows (`src/win/`) cada animalito es una ventanita en capas
+(`UpdateLayeredWindow`), siempre encima, sin botón en la barra; Windows deja
+pasar el mouse por lo transparente. Las ventanas salen de `EnumWindows`, con
+su borde real (DWM). Las de otros escritorios virtuales vienen "encubiertas"
+y se brincan. El cerebro (`bicho.rs`), el dibujo (`arte.rs`) y la correteada
+(`juego.rs`) son los mismos; lo que comparten del escritorio vive en
+`mundo.rs`.

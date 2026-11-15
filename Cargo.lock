@@ -152,6 +152,7 @@ dependencies = [
  "libc",
  "serde_json",
  "smithay-client-toolkit",
+ "windows-sys",
  "zbus",
 ]
 

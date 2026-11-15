@@ -7,8 +7,7 @@
 //! izquierda de su lienzo (`cw × ch`), con las patas en la orilla de abajo.
 
 use crate::arte::{Forma, Look, Pose};
-use crate::hypr::{Mundo, Ventana};
-use crate::texto::Repisa;
+use crate::mundo::{Mundo, Repisa, Ventana};
 
 /// Por dónde puede caminar: el piso (`ventana: None`) o el techo de una
 /// ventana. `x0..x1` son las x válidas del lienzo; `y` donde queda parado.
