@@ -150,7 +150,8 @@ El estado de cada sesión queda en `$XDG_RUNTIME_DIR/bicho/claude/`.
 
 Si existe `~/.config/bicho/<especie>.txt`, ese dibujo reemplaza al de la
 especie (nomás en esa máquina). Las letras son las del código: `o` contorno,
-`b` cuerpo, `h` brillo, `w` ojo, `p` pupila, `n` cachete; renglones de 16.
+`b` cuerpo, `h` brillo, `w` ojo, `p` pupila, `n` cachete, `c` crema (pelo
+blanco, no parpadea); renglones de 16.
 
 ```text
 // comentarios así

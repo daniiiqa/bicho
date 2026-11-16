@@ -18,10 +18,13 @@ pub const PUPILA: u8 = 5;
 pub const CORAZON: u8 = 6;
 pub const ZZZ: u8 = 7;
 pub const NARIZ: u8 = 8;
-pub const COLORES: usize = 9;
+/// el pelo blanco (bashira): casi el del ojo, con tantito del cuerpo
+pub const CREMA: u8 = 9;
+pub const COLORES: usize = 10;
 
 /// Un animalito: su cuerpo mirando a la derecha (o = contorno, b = cuerpo,
-/// h = brillo, w = ojo, p = pupila, n = nariz, a/l = antenas y patas) y sus
+/// h = brillo, w = ojo, p = pupila, n = nariz, c = crema, a/l = antenas y
+/// patas) y sus
 /// patas. Sentado o dormido se dibuja sin patas, pegado al piso.
 pub struct Especie {
     pub nombre: &'static str,
@@ -258,39 +261,46 @@ pub const CLAUDIO: Especie = Especie {
     color: &["#d97757"],
 };
 
-/// bashira: una husky dorada, de orejas paradas, con su máscara blanca (los
-/// ojos sobre lo blanco), el pecho blanco y la cola enroscada sobre el lomo,
-/// que menea al caminar. Dorada siempre (no cambia con el look).
+/// bashira: una husky dorada, de orejas paradas (por dentro más claritas),
+/// gorrito dorado con cejitas crema, la cara crema con sus ojitos y la
+/// nariz, el pecho crema, patas gruesas y la cola enroscada hacia adelante
+/// con la punta crema, que se mece al caminar. Dorada siempre (no cambia
+/// con el look). Lo crema es `c` (su propio color: al parpadear no se
+/// cierra como el blanco de los ojos).
 pub const BASHIRA: Especie = Especie {
     nombre: "bashira",
     cuerpo: &[
-        "..........o...o.",
-        ".........obo.obo",
-        ".........ohbbbho",
-        "..ooo....obbbbbo",
-        ".obhbo..owpwwpwo",
-        ".obo.o..owwwwwwo",
-        ".obo.oooowwoowwo",
-        "..obbbbhhowwwwo.",
-        "..obbbbbbbbwwbo.",
+        "........o....o..",
+        ".......obo..obo.",
+        ".......ohboobho.",
+        "..ooo..obbbbbbo.",
+        ".obcco.obcbbcbo.",
+        "obbo...owpccpwo.",
+        "obo....occcccco.",
+        ".obo...occoocco.",
+        "..obooooocccco..",
+        "..obbbhhhbcccbo.",
+        "..obbbbbbbbccbo.",
         "..obbbbbbbbbbbo.",
         "...ooooooooooo..",
     ],
     cuerpo_b: Some(&[
-        "..........o...o.",
-        ".........obo.obo",
-        ".........ohbbbho",
-        ".ooo.....obbbbbo",
-        "obhbo...owpwwpwo",
-        "obo.o...owwwwwwo",
-        ".obo.ooowwwoowwo",
-        "..obbbbhhowwwwo.",
-        "..obbbbbbbbwwbo.",
+        "........o....o..",
+        ".......obo..obo.",
+        ".......ohboobho.",
+        ".ooo...obbbbbbo.",
+        "obcco..obcbbcbo.",
+        "obo....owpccpwo.",
+        "obo....occcccco.",
+        ".obo...occoocco.",
+        "..obooooocccco..",
+        "..obbbhhhbcccbo.",
+        "..obbbbbbbbccbo.",
         "..obbbbbbbbbbbo.",
         "...ooooooooooo..",
     ]),
-    patas_a: &["...l.l.....l.l..", "..l...l...l...l."],
-    patas_b: &["...l.l.....l.l..", "...l.l.....l.l.."],
+    patas_a: &["...ob.ob..ob.ob.", "...oo.oo..oo.oo."],
+    patas_b: &["..ob..ob.ob..ob.", "..oo..oo.oo..oo."],
     brinca: false,
     blanda: None,
     invoca: false,
@@ -407,6 +417,7 @@ fn celda(c: char) -> u8 {
         'b' => CUERPO,
         'h' => BRILLO,
         'w' => OJO,
+        'c' => CREMA,
         'p' => PUPILA,
         'n' => NARIZ,
         _ => 0,
@@ -779,6 +790,32 @@ pub fn terminal(g: &Grid, colores: &[u32; COLORES]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bashira_parpadea_sin_apagar_lo_crema() {
+        let mut look = Look {
+            pose: Pose::Parado,
+            derecha: true,
+            parpadeo: false,
+            corazon: None,
+            zzz: None,
+            notas: None,
+            piensa: None,
+            alerta: None,
+            reloj: None,
+            casa: false,
+            forma: Forma::Normal,
+        };
+        let cuenta = |g: &Grid, c: u8| g.iter().flatten().filter(|&&x| x == c).count();
+        let abierta = grid(&BASHIRA, &look);
+        look.parpadeo = true;
+        let cerrada = grid(&BASHIRA, &look);
+        // la cara y el pecho siguen crema; nomás los ojitos se hacen raya
+        assert_eq!(cuenta(&cerrada, CREMA), cuenta(&abierta, CREMA));
+        assert!(cuenta(&abierta, CREMA) > 20);
+        assert_eq!(cuenta(&cerrada, OJO), 0);
+        assert_eq!(cuenta(&cerrada, PUPILA), cuenta(&abierta, PUPILA) + 2);
+    }
 
     #[test]
     fn el_halo_rodea_al_dibujo_sin_taparlo() {

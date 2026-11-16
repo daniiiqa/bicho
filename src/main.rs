@@ -573,6 +573,7 @@ fn colores(e: &arte::Especie) -> [u32; arte::COLORES] {
     p[arte::CORAZON as usize] = opaco(rgb(&["critical", "color1"], 0xe06c75));
     p[arte::ZZZ as usize] = opaco(frente);
     p[arte::NARIZ as usize] = opaco(mezcla(rgb(&["critical", "color1"], 0xe06c75), frente, 0.35));
+    p[arte::CREMA as usize] = opaco(mezcla(frente, cuerpo, 0.12));
     p
 }
 
