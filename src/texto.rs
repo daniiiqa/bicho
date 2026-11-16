@@ -496,7 +496,9 @@ mod tests {
 #[test]
 #[ignore]
 fn en_vivo() {
-    let m = crate::hypr::mundo(&crate::hypr::monitor_enfocado().unwrap(), 2.0);
+    let m = crate::hypr::mundos(2.0)
+        .remove(&crate::hypr::monitor_enfocado().unwrap())
+        .unwrap();
     for v in m.ventanas.iter().filter(|v| m.clis.contains(&v.id)) {
         let rect = (v.x + m.origen.0, v.y + m.origen.1, v.w, v.h);
         // como en la vida real: nomás alrededor de un animalito
@@ -550,7 +552,9 @@ fn memoria() {
             .parse::<u64>()
             .unwrap()
     };
-    let m = crate::hypr::mundo(&crate::hypr::monitor_enfocado().unwrap(), 2.0);
+    let m = crate::hypr::mundos(2.0)
+        .remove(&crate::hypr::monitor_enfocado().unwrap())
+        .unwrap();
     let v = m
         .ventanas
         .iter()

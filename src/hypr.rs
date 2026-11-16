@@ -115,39 +115,19 @@ pub(crate) fn es_terminal(pid: i64) -> bool {
     )
 }
 
-pub fn mundo(monitor: &str, borde: f32) -> Mundo {
-    // en KDE las cuenta el script de KWin
-    if let Some(m) = crate::kde::mundo() {
-        return m;
-    }
+/// El mundo de cada monitor (por su nombre), con una sola pregunta a
+/// Hyprland: las ventanas de su escritorio de ahorita, en coordenadas de ese
+/// monitor. `todas` y `pids` son las mismas para todos (todas las ventanas).
+pub fn mundos(borde: f32) -> std::collections::HashMap<String, Mundo> {
     let mons = pide("monitors");
-    let Some(m) = mons
-        .as_array()
-        .and_then(|a| a.iter().find(|m| m["name"] == monitor))
-    else {
-        return Mundo::default();
-    };
-    let (mx, my) = (f(&m["x"]), f(&m["y"]));
-    let ws = m["activeWorkspace"]["id"].as_i64();
-    let especial = m["specialWorkspace"]["name"]
-        .as_str()
-        .filter(|s| !s.is_empty());
-    // con el scratchpad abierto se para sobre ese; si no, sobre el normal
-    let cuenta = |c: &Value| match especial {
-        Some(e) => c["workspace"]["name"].as_str() == Some(e),
-        None => c["workspace"]["id"].as_i64() == ws,
-    };
     let clientes = pide("clients");
-    let todas = clientes
-        .as_array()
-        .into_iter()
-        .flatten()
+    let lista: Vec<&Value> = clientes.as_array().into_iter().flatten().collect();
+    let todas: Vec<String> = lista
+        .iter()
         .filter_map(|c| c["address"].as_str().map(String::from))
         .collect();
-    let pids = clientes
-        .as_array()
-        .into_iter()
-        .flatten()
+    let pids: Vec<(String, i32)> = lista
+        .iter()
         .filter_map(|c| {
             Some((
                 c["address"].as_str()?.to_string(),
@@ -155,40 +135,66 @@ pub fn mundo(monitor: &str, borde: f32) -> Mundo {
             ))
         })
         .collect();
-    let ventanas = clientes
-        .as_array()
+    // qué ventanas son terminales (una vez, no por monitor)
+    let terminales: Vec<&str> = lista
+        .iter()
+        .filter(|c| es_terminal(c["pid"].as_i64().unwrap_or(0)))
+        .filter_map(|c| c["address"].as_str())
+        .collect();
+    mons.as_array()
         .into_iter()
         .flatten()
-        .filter(|c| {
-            c["mapped"].as_bool() == Some(true) && c["hidden"].as_bool() != Some(true) && cuenta(c)
+        .filter_map(|m| {
+            let nombre = m["name"].as_str()?.to_string();
+            let (mx, my) = (f(&m["x"]), f(&m["y"]));
+            let ws = m["activeWorkspace"]["id"].as_i64();
+            let especial = m["specialWorkspace"]["name"]
+                .as_str()
+                .filter(|s| !s.is_empty());
+            // con el scratchpad abierto se para sobre ese; si no, sobre el normal
+            let cuenta = |c: &Value| match especial {
+                Some(e) => c["workspace"]["name"].as_str() == Some(e),
+                None => c["workspace"]["id"].as_i64() == ws,
+            };
+            let ventanas = lista
+                .iter()
+                .filter(|c| {
+                    c["mapped"].as_bool() == Some(true)
+                        && c["hidden"].as_bool() != Some(true)
+                        && cuenta(c)
+                })
+                // en pantalla completa no hay de dónde agarrarse
+                .filter(|c| c["fullscreen"].as_i64().unwrap_or(0) == 0)
+                .map(|c| Ventana {
+                    id: c["address"].as_str().unwrap_or_default().to_string(),
+                    x: f(&c["at"][0]) - mx,
+                    y: f(&c["at"][1]) - my,
+                    w: f(&c["size"][0]),
+                    h: f(&c["size"][1]),
+                })
+                .collect();
+            let clis = lista
+                .iter()
+                .filter(|c| cuenta(c))
+                .filter_map(|c| c["address"].as_str())
+                .filter(|a| terminales.contains(a))
+                .map(String::from)
+                .collect();
+            Some((
+                nombre,
+                Mundo {
+                    ventanas,
+                    abajo: f(&m["reserved"][3]),
+                    arriba: f(&m["reserved"][1]),
+                    borde,
+                    origen: (mx, my),
+                    todas: todas.clone(),
+                    clis,
+                    pids: pids.clone(),
+                },
+            ))
         })
-        // en pantalla completa no hay de dónde agarrarse
-        .filter(|c| c["fullscreen"].as_i64().unwrap_or(0) == 0)
-        .map(|c| Ventana {
-            id: c["address"].as_str().unwrap_or_default().to_string(),
-            x: f(&c["at"][0]) - mx,
-            y: f(&c["at"][1]) - my,
-            w: f(&c["size"][0]),
-            h: f(&c["size"][1]),
-        })
-        .collect();
-    let clis = clientes
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|c| cuenta(c) && es_terminal(c["pid"].as_i64().unwrap_or(0)))
-        .filter_map(|c| c["address"].as_str().map(String::from))
-        .collect();
-    Mundo {
-        ventanas,
-        abajo: f(&m["reserved"][3]),
-        arriba: f(&m["reserved"][1]),
-        borde,
-        origen: (mx, my),
-        todas,
-        clis,
-        pids,
-    }
+        .collect()
 }
 
 /// La ventana que se ve en (x, y) (coordenadas del monitor) en el escritorio

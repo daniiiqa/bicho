@@ -111,6 +111,9 @@ impl App {
             if p.escapa_otra > 0.0 || !p.bicho.puede_jugar() {
                 continue;
             }
+            // el cursor (global) en coordenadas de su monitor
+            let (ox, oy) = self.origen_de(i);
+            let (c, a) = ((c.0 - ox, c.1 - oy), (a.0 - ox, a.1 - oy));
             let b = &p.bicho;
             let (bx, by) = (b.x + b.cw / 2.0, b.y + b.ch / 2.0);
             let (d, d_antes) = ((c.0 - bx).hypot(c.1 - by), (a.0 - bx).hypot(a.1 - by));
@@ -124,11 +127,13 @@ impl App {
     }
 
     fn roba_si_alcanza(&mut self) {
-        let Some((cx, cy)) = self.cursor else { return };
-        if self.cursor_quieto < QUIETO {
+        if self.cursor.is_none() || self.cursor_quieto < QUIETO {
             return;
         }
         for i in 0..self.mascotas.len() {
+            let Some((cx, cy)) = self.cursor_de(i) else {
+                continue;
+            };
             let b = &self.mascotas[i].bicho;
             if !b.persigue() {
                 continue;
@@ -168,7 +173,7 @@ impl App {
         let (i, ventana) = candidatos
             [(self.azar_t() * candidatos.len() as f32) as usize % candidatos.len()]
         .clone();
-        let medio = self.pantalla.0 / 2.0;
+        let medio = self.tam_de(i).0 / 2.0;
         let b = &mut self.mascotas[i].bicho;
         let der = b.x < medio;
         b.llama(der);
@@ -186,12 +191,14 @@ impl App {
         match t {
             Travesura::Roba { i, t, puso } => {
                 let t = t + dt;
-                // el cursor de verdad, cada cuadro (¿lo jalaste?)
-                let ahora = hypr::cursor(self.mundo.origen);
+                // el cursor de verdad, cada cuadro (¿lo jalaste?), global
+                // como lo dejó
+                let ahora = hypr::cursor((0.0, 0.0));
+                let (ox, oy) = self.origen_de(i);
                 if let (Some(c), Some(puso)) = (ahora, puso)
                     && (c.0 - puso.0).hypot(c.1 - puso.1) > JALON
                 {
-                    let der = self.mascotas.get(i)?.bicho.x < c.0;
+                    let der = self.mascotas.get(i)?.bicho.x < c.0 - ox;
                     self.mascotas[i].bicho.esquiva(!der);
                     return None;
                 }
@@ -201,9 +208,8 @@ impl App {
                     return None;
                 }
                 let b = &self.mascotas.get(i)?.bicho;
-                let (x, y) = (b.x + b.cw / 2.0, b.y - b.dy + b.ch * 0.15);
-                let (ox, oy) = self.mundo.origen;
-                hypr::mueve_cursor(x + ox, y + oy);
+                let (x, y) = (b.x + b.cw / 2.0 + ox, b.y - b.dy + b.ch * 0.15 + oy);
+                hypr::mueve_cursor(x, y);
                 self.cursor = Some((x, y));
                 self.cursor_antes_t = Some((x, y));
                 Some(Travesura::Roba {

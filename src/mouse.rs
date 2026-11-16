@@ -197,7 +197,7 @@ impl PointerHandler for App {
                     // soltado (no aventado) con SUPER encima de una ventana: se mete
                     if con_super
                         && vx.hypot(vy) < SOLTAR
-                        && let Some(m) = self.monitor.clone()
+                        && let Some(m) = Some(self.mascotas[a.i].monitor.clone())
                         && let Some(v) = hypr::ventana_en(&m, gx, gy)
                     {
                         // en una terminal (y con letras: en KDE no hay), que

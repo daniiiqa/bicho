@@ -60,6 +60,8 @@ mod menu;
 #[cfg(unix)]
 mod mouse;
 #[cfg(unix)]
+mod pantallas;
+#[cfg(unix)]
 mod reacciones;
 #[cfg(unix)]
 mod shell;
@@ -638,6 +640,11 @@ struct Mascota {
     muestra_nombre: f32,
     /// lo que le falta para poder volver a escaparse del cursor (s)
     escapa_otra: f32,
+    /// en qué monitor anda (su capa es de esa salida), si su capa ya está
+    /// lista para pintarse, y la escala del buffer de ese monitor
+    monitor: String,
+    configurado: bool,
+    escala_buffer: i32,
 }
 
 /// Dónde queda el cuerpo de un animalito parado, dentro de su lienzo.
@@ -738,8 +745,13 @@ struct App {
     cada_resto: f32,
     /// cada cuánto se le regresa memoria al sistema
     cada_limpieza: f32,
-    /// dónde están las ventanas de veras (`mundo` se va acercando a esto)
-    reales: Vec<hypr::Ventana>,
+    /// los monitores, y el mundo de cada uno (`mundo` es el de casa: el
+    /// monitor donde los soltaste)
+    pantallas: Vec<pantallas::Pantalla>,
+    mundos: HashMap<String, hypr::Mundo>,
+    /// dónde están las ventanas de veras en cada monitor (`mundos` se va
+    /// acercando a esto)
+    reales: HashMap<String, Vec<hypr::Ventana>>,
     /// las que vienen deslizándose a su lugar
     deslizando: std::collections::HashSet<String>,
     /// segundos que quedan de ir rápido porque se movió una ventana
@@ -794,28 +806,15 @@ impl App {
             self.medidor = Some(capa);
         }
         let px = self.cfg.escala;
+        self.lee_pantallas();
+        let casa = self.monitor.clone().unwrap_or_default();
+        let numero = self.numero_de(&casa);
+        let escala = info.scale_factor.max(1);
         for (i, entrada) in self.cfg.pets.clone().iter().enumerate() {
             let Some(especie) = especie_de(entrada) else {
                 continue;
             };
-            let surface = self.compositor.create_surface(&self.qh);
-            // vacía hasta que se pinte: luego es nomás su cuerpo
-            if let Ok(region) = Region::new(&self.compositor) {
-                surface.set_input_region(Some(region.wl_region()));
-            }
-            let layer = self.layer_shell.create_layer_surface(
-                &self.qh,
-                surface,
-                Layer::Top,
-                Some("bicho"),
-                Some(&output),
-            );
-            layer.set_anchor(Anchor::TOP | Anchor::LEFT);
-            layer.set_exclusive_zone(-1);
-            // al darle clic toma el teclado: así se sabe si traes SUPER apretado
-            layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
-            layer.set_size(arte::ANCHO as u32 * px, arte::ALTO as u32 * px);
-            layer.commit();
+            let layer = self.capa_en(&output);
             let semilla = self
                 .semilla
                 .wrapping_mul(0x9e37_79b9_7f4a_7c15)
@@ -830,6 +829,7 @@ impl App {
             b.trepa = self.cfg.trepa;
             b.travieso = self.cfg.travieso;
             b.salta = especie.brinca;
+            b.pantalla = numero;
             b.aparece(self.pantalla.0);
             self.mascotas.push(Mascota {
                 especie,
@@ -847,6 +847,9 @@ impl App {
                 muestra_nombre: 3.0,
                 escapa_otra: 0.0,
                 halo: None,
+                monitor: casa.clone(),
+                configurado: false,
+                escala_buffer: escala,
             });
         }
     }
@@ -867,7 +870,12 @@ impl App {
         let pegados = self.mascotas.iter().any(|p| p.bicho.pegado());
         if self.cada_mundo <= 0.0 || pegados {
             self.cada_mundo = 0.4;
-            self.pon_mundo(hypr::mundo(&monitor, self.borde));
+            // en KDE nomás el de casa (lo cuenta el script de KWin)
+            let mundos = match kde::mundo() {
+                Some(m) => HashMap::from([(monitor.clone(), m)]),
+                None => hypr::mundos(self.borde),
+            };
+            self.pon_mundos(mundos, &monitor);
         }
         self.suaviza(dt);
         self.se_movio = (self.se_movio - dt).max(0.0);
@@ -894,10 +902,16 @@ impl App {
         self.cada_cursor -= dt;
         if self.cada_cursor <= 0.0 {
             self.cada_cursor = 0.1;
-            self.cursor = hypr::cursor(self.mundo.origen);
+            // global (en KDE viene del monitor de casa)
+            self.cursor = hypr::cursor((0.0, 0.0)).map(|(x, y)| {
+                if kde::activo() {
+                    (x + self.mundo.origen.0, y + self.mundo.origen.1)
+                } else {
+                    (x, y)
+                }
+            });
         }
         let musica = self.cfg.baila && self.musica.load(Ordering::Relaxed);
-        let (w, h) = self.pantalla;
         self.letras();
         self.tick_teclado(dt);
         self.tick_claude(dt);
@@ -906,12 +920,22 @@ impl App {
         self.tick_contraste(dt);
         self.tick_juego(dt);
         let mut looks = Vec::with_capacity(self.mascotas.len());
-        for p in &mut self.mascotas {
-            p.bicho.musica = musica;
+        for i in 0..self.mascotas.len() {
+            // cada uno con lo de su monitor
+            let (w, h) = self.tam_de(i);
+            let cursor = self.cursor_de(i);
+            let puertas = self.puertas_de(i);
+            let m = self
+                .mundos
+                .get(&self.mascotas[i].monitor)
+                .unwrap_or(&self.mundo);
+            let b = &mut self.mascotas[i].bicho;
+            b.musica = musica;
+            b.puertas = puertas;
             if let Some(n) = noche {
-                p.bicho.noche = n;
+                b.noche = n;
             }
-            looks.push(p.bicho.tick(dt, &self.mundo, w, h, self.cursor));
+            looks.push(b.tick(dt, m, w, h, cursor));
         }
         // si dos se topan en el mismo lugar, se saludan
         for i in 0..self.mascotas.len() {
@@ -921,11 +945,23 @@ impl App {
                     continue;
                 };
                 if sa == sb && (xa - xb).abs() < a.cw * 0.7 {
+                    // en el mismo suelo: en el mismo monitor
+                    let (w, h) = self.tam_de(i);
+                    let m = self
+                        .mundos
+                        .get(&self.mascotas[i].monitor)
+                        .unwrap_or(&self.mundo);
                     self.mascotas[i].bicho.cariño(xb > xa);
                     self.mascotas[j].bicho.cariño(xa > xb);
-                    looks[i] = self.mascotas[i].bicho.tick(0.0, &self.mundo, w, h, None);
-                    looks[j] = self.mascotas[j].bicho.tick(0.0, &self.mundo, w, h, None);
+                    looks[i] = self.mascotas[i].bicho.tick(0.0, m, w, h, None);
+                    looks[j] = self.mascotas[j].bicho.tick(0.0, m, w, h, None);
                 }
+            }
+        }
+        // los que se salieron por la orilla, al monitor de al lado
+        for i in 0..self.mascotas.len() {
+            if let Some(der) = self.mascotas[i].bicho.sale {
+                self.cruza(i, der);
             }
         }
         for (i, look) in looks.iter().enumerate() {
@@ -971,7 +1007,14 @@ impl App {
         }
         s += "bichos:\n";
         for p in &self.mascotas {
-            s += &format!("  {} {}\n", p.especie.nombre, p.bicho.resumen());
+            s += &format!(
+                "  {} [{} lista {} escala {}] {}\n",
+                p.especie.nombre,
+                p.monitor,
+                p.configurado,
+                p.escala_buffer,
+                p.bicho.resumen()
+            );
         }
         let _ = std::fs::write(runtime().join("bicho/debug.txt"), s);
     }
@@ -985,7 +1028,9 @@ impl App {
         }
         self.cada_contraste = 0.5;
         let activo = self.cfg.contraste && !kde::activo();
-        let (ox, oy) = self.mundo.origen;
+        let origenes: Vec<(f32, f32)> = (0..self.mascotas.len())
+            .map(|i| self.origen_de(i))
+            .collect();
         let Ok(mut e) = self.contraste.lock() else {
             return;
         };
@@ -996,6 +1041,7 @@ impl App {
                 .filter(|(_, p)| !p.bicho.oculto)
                 .filter_map(|(i, p)| {
                     let b = &p.bicho;
+                    let (ox, oy) = origenes[i];
                     Some(contraste::Pedido {
                         i,
                         rect: (b.x + ox, b.y - b.dy + oy, b.cw, b.ch),
@@ -1031,7 +1077,12 @@ impl App {
     }
 
     fn pinta(&mut self, i: usize, g: &arte::Grid) {
-        let px = (self.cfg.escala as i32 * self.escala_buffer) as usize;
+        // recién cruzado a otro monitor: su capa nueva todavía no está lista
+        if !self.mascotas[i].configurado {
+            return;
+        }
+        let escala_buffer = self.mascotas[i].escala_buffer;
+        let px = (self.cfg.escala as i32 * escala_buffer) as usize;
         let (w, h) = ((arte::ANCHO * px) as i32, (arte::ALTO * px) as i32);
         let shm = &self.shm;
         let celda = self.cfg.escala as i32;
@@ -1065,7 +1116,7 @@ impl App {
         );
         // el mismo dibujo de antes: nomás se mueve la capa (si se movió)
         let igual = p.pintado.as_ref().is_some_and(|(gg, c, e, h)| {
-            gg == g && c == &p.colores && *e == self.escala_buffer && *h == p.halo
+            gg == g && c == &p.colores && *e == escala_buffer && *h == p.halo
         });
         if igual && p.pool.is_some() {
             if margen != p.margen {
@@ -1088,13 +1139,13 @@ impl App {
                 let (w, h) = (arte::ANCHO * px, arte::ALTO * px);
                 arte::halo(canvas, w, h, px.div_ceil(2).max(1), halo);
             }
-            p.pintado = Some((*g, p.colores, self.escala_buffer, p.halo));
+            p.pintado = Some((*g, p.colores, escala_buffer, p.halo));
             if margen != p.margen {
                 p.layer.set_margin(margen.0, 0, 0, margen.1);
                 p.margen = margen;
             }
             let surface = p.layer.wl_surface();
-            surface.set_buffer_scale(self.escala_buffer);
+            surface.set_buffer_scale(escala_buffer);
             surface.damage_buffer(0, 0, w, h);
             if buffer.attach_to(surface).is_ok() {
                 p.layer.commit();
@@ -1210,7 +1261,9 @@ fn vive(cfg: Config) -> Result<(), String> {
         cada_mundo: 0.0,
         cada_resto: 0.0,
         cada_limpieza: 30.0,
-        reales: Vec::new(),
+        pantallas: Vec::new(),
+        mundos: HashMap::new(),
+        reales: HashMap::new(),
         deslizando: Default::default(),
         se_movio: 0.0,
         cada_cursor: 0.0,
@@ -1230,15 +1283,24 @@ impl CompositorHandler for App {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         factor: i32,
     ) {
-        if factor.max(1) != self.escala_buffer {
-            self.escala_buffer = factor.max(1);
-            for p in &mut self.mascotas {
+        let factor = factor.max(1);
+        // el de un animalito (cada uno, la de su monitor)
+        if let Some(p) = self
+            .mascotas
+            .iter_mut()
+            .find(|p| p.layer.wl_surface() == surface)
+        {
+            if p.escala_buffer != factor {
+                p.escala_buffer = factor;
                 p.pool = None;
             }
+            return;
         }
+        // el globo o la etiqueta
+        self.escala_buffer = factor;
     }
     fn transform_changed(
         &mut self,
@@ -1274,6 +1336,7 @@ impl OutputHandler for App {
     }
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
         self.crea(output);
+        self.lee_pantallas();
     }
     fn update_output(
         &mut self,
@@ -1288,8 +1351,11 @@ impl OutputHandler for App {
             self.pantalla = (w as f32, h as f32);
         }
         self.crea(output);
+        self.lee_pantallas();
     }
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        self.lee_pantallas();
+    }
 }
 
 #[cfg(unix)]
@@ -1302,6 +1368,15 @@ impl LayerShellHandler for App {
         } else if self.medidor.as_ref() == Some(layer) {
             // la capa que mide los paneles: sin ella, se queda lo último medido
             self.medidor = None;
+        } else if let Some(i) = self.mascotas.iter().position(|p| &p.layer == layer)
+            && let Some(casa) = self.monitor.clone()
+            && self.mascotas[i].monitor != casa
+            && self.pantalla(&casa).is_some()
+        {
+            // desconectaste el monitor donde andaba: de vuelta al de casa
+            self.muda(i, &casa);
+            let ancho = self.pantalla.0;
+            self.mascotas[i].bicho.aparece(ancho);
         } else {
             self.exit = true;
         }
@@ -1330,7 +1405,12 @@ impl LayerShellHandler for App {
                     e.configurado = true;
                 }
             }
-            _ => self.configurado = true,
+            _ => {
+                self.configurado = true;
+                if let Some(p) = self.mascotas.iter_mut().find(|p| &p.layer == layer) {
+                    p.configurado = true;
+                }
+            }
         }
     }
 }

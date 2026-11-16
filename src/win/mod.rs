@@ -966,7 +966,7 @@ impl App {
         let p = &mut self.mascotas[i];
         p.mon = j;
         p.bicho.pantalla = j as u8;
-        p.bicho.cruza(x, y);
+        p.bicho.cruza(x, y, der);
         self.pon_lienzo(i);
     }
 

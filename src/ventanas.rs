@@ -28,12 +28,15 @@ impl App {
             }
             return;
         }
-        let m = &self.mundo;
-        let (ox, oy) = m.origen;
+        // cada uno en su monitor: lo de las fotos va en coordenadas globales
+        let origenes: Vec<(f32, f32)> = (0..self.mascotas.len())
+            .map(|i| self.origen_de(i))
+            .collect();
         let mut tapar: Vec<texto::Rect> = self
             .mascotas
             .iter()
-            .map(|p| {
+            .zip(&origenes)
+            .map(|(p, &(ox, oy))| {
                 (
                     p.bicho.x + ox,
                     p.bicho.y - 4.0 + oy,
@@ -43,6 +46,7 @@ impl App {
             })
             .collect();
         if let Some(d) = &self.dialogo {
+            let (ox, oy) = origenes.get(d.i).copied().unwrap_or(self.mundo.origen);
             let s = self.cfg.escala as f32;
             tapar.push((
                 d.margen.1 as f32 + ox,
@@ -53,7 +57,12 @@ impl App {
         }
         let mut pedidos: Vec<texto::Pedido> = Vec::new();
         // nomás los despiertos piden fotos (dormido o sentado no brinca)
-        for p in self.mascotas.iter().filter(|p| p.bicho.despierto()) {
+        for (i, p) in self.mascotas.iter().enumerate() {
+            if !p.bicho.despierto() {
+                continue;
+            }
+            let m = self.mundos.get(&p.monitor).unwrap_or(&self.mundo);
+            let (ox, oy) = origenes[i];
             let Some(id) = p.bicho.dentro.as_ref().filter(|id| m.clis.contains(id)) else {
                 continue;
             };
@@ -94,9 +103,10 @@ impl App {
             }
         }
         let Ok(mut e) = self.texto.lock() else { return };
+        let clis = &self.mundo.clis;
         for p in &mut self.mascotas {
             match &p.bicho.dentro {
-                Some(id) if m.clis.contains(id) => {
+                Some(id) if clis.contains(id) => {
                     // cambió de terminal: las repisas de la otra no sirven
                     if p.repisas_de.as_ref() != Some(id) {
                         p.bicho.repisas.clear();
@@ -121,30 +131,73 @@ impl App {
 }
 
 impl App {
-    /// El mundo nuevo de Hyprland: las ventanas que ya conocía se quedan
-    /// donde las veía (`suaviza` las acerca); las nuevas, donde estén.
-    pub(crate) fn pon_mundo(&mut self, nuevo: hypr::Mundo) {
+    /// Los mundos nuevos de Hyprland (uno por monitor): las ventanas que ya
+    /// conocía se quedan donde las veía (`suaviza` las acerca); las nuevas,
+    /// donde estén. `casa`: el monitor donde los soltaste.
+    pub(crate) fn pon_mundos(&mut self, nuevos: HashMap<String, hypr::Mundo>, casa: &str) {
         // ¿se movió alguna? entonces un ratito a 60 por segundo
-        let movida = nuevo.ventanas.iter().any(|v| {
-            self.reales
-                .iter()
-                .any(|r| r.id == v.id && (r.x, r.y, r.w, r.h) != (v.x, v.y, v.w, v.h))
+        let movida = nuevos.iter().any(|(nombre, n)| {
+            let reales = self.reales.get(nombre);
+            n.ventanas.iter().any(|v| {
+                reales
+                    .into_iter()
+                    .flatten()
+                    .any(|r| r.id == v.id && (r.x, r.y, r.w, r.h) != (v.x, v.y, v.w, v.h))
+            })
         });
         if movida {
             self.se_movio = SE_MOVIO;
         }
-        self.reales = nuevo.ventanas.clone();
-        let viejas = std::mem::take(&mut self.mundo.ventanas);
-        let ventanas = nuevo
-            .ventanas
-            .into_iter()
-            .map(|v| viejas.iter().find(|o| o.id == v.id).cloned().unwrap_or(v))
-            .collect();
-        self.mundo = hypr::Mundo { ventanas, ..nuevo };
-        // sin Hyprland, lo de los paneles lo midió la capa de prueba
-        if self.medidor.is_some() {
-            self.mundo.abajo = self.libre_abajo;
+        let mut viejos = std::mem::take(&mut self.mundos);
+        self.reales.clear();
+        for (nombre, nuevo) in nuevos {
+            self.reales.insert(nombre.clone(), nuevo.ventanas.clone());
+            let viejas = viejos
+                .remove(&nombre)
+                .map(|m| m.ventanas)
+                .unwrap_or_default();
+            let ventanas = nuevo
+                .ventanas
+                .into_iter()
+                .map(|v| viejas.iter().find(|o| o.id == v.id).cloned().unwrap_or(v))
+                .collect();
+            let mut m = hypr::Mundo { ventanas, ..nuevo };
+            // sin Hyprland, lo de los paneles lo midió la capa de prueba
+            if nombre == casa && self.medidor.is_some() {
+                m.abajo = self.libre_abajo;
+            }
+            self.mundos.insert(nombre, m);
         }
+        self.copia_casa();
+    }
+
+    /// `mundo` es el del monitor de casa, pero con las terminales de todos
+    /// (lo que no es de un monitor: pids, todas, terminales).
+    fn copia_casa(&mut self) {
+        let Some(casa) = self.monitor.clone() else {
+            return;
+        };
+        let Some(m) = self.mundos.get(&casa) else {
+            return;
+        };
+        let mut copia = hypr::Mundo {
+            ventanas: m.ventanas.clone(),
+            abajo: m.abajo,
+            arriba: m.arriba,
+            borde: m.borde,
+            origen: m.origen,
+            todas: m.todas.clone(),
+            clis: Vec::new(),
+            pids: m.pids.clone(),
+        };
+        for otro in self.mundos.values() {
+            for c in &otro.clis {
+                if !copia.clis.contains(c) {
+                    copia.clis.push(c.clone());
+                }
+            }
+        }
+        self.mundo = copia;
     }
 
     /// Las ventanas que brincaron lejos se deslizan a su lugar (Hyprland
@@ -152,33 +205,41 @@ impl App {
     /// el mouse se siguen tal cual, sin retraso.
     pub(crate) fn suaviza(&mut self, dt: f32) {
         let k = 1.0 - (-dt / SUAVE).exp();
-        for v in &mut self.mundo.ventanas {
-            let Some(r) = self.reales.iter().find(|r| r.id == v.id) else {
+        for (nombre, m) in &mut self.mundos {
+            let Some(reales) = self.reales.get(nombre) else {
                 continue;
             };
-            // ya que empezó a deslizarse, sigue hasta llegar (si no, el
-            // último pedazo sería otro brinco)
-            let dist = (r.x - v.x)
-                .abs()
-                .max((r.y - v.y).abs())
-                .max((r.w - v.w).abs())
-                .max((r.h - v.h).abs());
-            if dist > SALTO_ANIMADO {
-                self.deslizando.insert(v.id.clone());
+            for v in &mut m.ventanas {
+                let Some(r) = reales.iter().find(|r| r.id == v.id) else {
+                    continue;
+                };
+                // ya que empezó a deslizarse, sigue hasta llegar (si no, el
+                // último pedazo sería otro brinco)
+                let dist = (r.x - v.x)
+                    .abs()
+                    .max((r.y - v.y).abs())
+                    .max((r.w - v.w).abs())
+                    .max((r.h - v.h).abs());
+                if dist > SALTO_ANIMADO {
+                    self.deslizando.insert(v.id.clone());
+                }
+                if dist < 0.5 || !self.deslizando.contains(&v.id) {
+                    self.deslizando.remove(&v.id);
+                    (v.x, v.y, v.w, v.h) = (r.x, r.y, r.w, r.h);
+                    continue;
+                }
+                for (a, b) in [
+                    (&mut v.x, r.x),
+                    (&mut v.y, r.y),
+                    (&mut v.w, r.w),
+                    (&mut v.h, r.h),
+                ] {
+                    *a += (b - *a) * k;
+                }
             }
-            if dist < 0.5 || !self.deslizando.contains(&v.id) {
-                self.deslizando.remove(&v.id);
-                (v.x, v.y, v.w, v.h) = (r.x, r.y, r.w, r.h);
-                continue;
-            }
-            for (a, b) in [
-                (&mut v.x, r.x),
-                (&mut v.y, r.y),
-                (&mut v.w, r.w),
-                (&mut v.h, r.h),
-            ] {
-                *a += (b - *a) * k;
-            }
+        }
+        if !self.deslizando.is_empty() {
+            self.copia_casa();
         }
     }
 

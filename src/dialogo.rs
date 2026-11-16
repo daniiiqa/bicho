@@ -50,10 +50,16 @@ impl App {
         motivo: Motivo,
     ) {
         self.cierra_dialogo();
+        // en el monitor donde anda quien habla
+        let monitor = self
+            .mascotas
+            .get(i)
+            .map(|p| p.monitor.clone())
+            .or(self.monitor.clone());
         let Some(output) = self
             .output
             .outputs()
-            .find(|o| self.output.info(o).and_then(|i| i.name) == self.monitor)
+            .find(|o| self.output.info(o).and_then(|i| i.name) == monitor)
         else {
             return;
         };
@@ -167,6 +173,13 @@ impl App {
 
     /// Cada cuadro: el globo avanza, sigue a claudio y se pinta.
     pub(crate) fn tick_dialogo(&mut self, dt: f32) {
+        // lo del monitor de quien habla
+        let Some(quien) = self.dialogo.as_ref().map(|d| d.i) else {
+            return;
+        };
+        let pantalla = self.tam_de(quien);
+        let barra = self.mundo_de(quien).arriba;
+        let escala_buffer = self.mascotas.get(quien).map_or(1, |p| p.escala_buffer);
         let Some(d) = self.dialogo.as_mut() else {
             return;
         };
@@ -207,11 +220,11 @@ impl App {
         ))
         .map_or(0.0, |c| c.1 as f32 * s);
         let centro = b.x + b.cw / 2.0;
-        let x = (centro - gw / 2.0).clamp(4.0, (self.pantalla.0 - gw - 4.0).max(4.0));
+        let x = (centro - gw / 2.0).clamp(4.0, (pantalla.0 - gw - 4.0).max(4.0));
         // que no quede debajo de la barra de arriba; ya volteado, regresa
         // arriba solo si sobra espacio (si no, al brincar parpadearía)
         let arriba = b.y + tope - gh - s;
-        let limite = self.mundo.arriba + 4.0;
+        let limite = barra + 4.0;
         let cabe = if d.globo.cola_arriba {
             arriba >= limite + 24.0
         } else {
@@ -219,7 +232,7 @@ impl App {
         };
         d.globo.cola_arriba = !cabe;
         let y = if d.globo.cola_arriba {
-            (b.y + b.ch + s).min(self.pantalla.1 - gh - 4.0).max(4.0)
+            (b.y + b.ch + s).min(pantalla.1 - gh - 4.0).max(4.0)
         } else {
             arriba
         };
@@ -234,7 +247,7 @@ impl App {
         colores[globo::LETRA as usize] = c[arte::OJO as usize];
         colores[globo::ACENTO as usize] = c[arte::CUERPO as usize];
 
-        let px = (self.cfg.escala as i32 * self.escala_buffer) as usize;
+        let px = (self.cfg.escala as i32 * escala_buffer) as usize;
         let (w, h) = ((d.globo.w * px) as i32, (d.globo.h * px) as i32);
         let mut pool = match d.pool.take() {
             Some(pool) => pool,
@@ -251,7 +264,7 @@ impl App {
                 d.margen = margen;
             }
             let surface = d.layer.wl_surface();
-            surface.set_buffer_scale(self.escala_buffer);
+            surface.set_buffer_scale(escala_buffer);
             surface.damage_buffer(0, 0, w, h);
             if buffer.attach_to(surface).is_ok() {
                 d.layer.commit();

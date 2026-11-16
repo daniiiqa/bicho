@@ -107,7 +107,8 @@ impl App {
                 let Some(i) = self.mascotas.iter().position(|p| p.especie.invoca) else {
                     return;
                 };
-                self.mascotas[i].bicho.sal_a_avisar(self.pantalla.0);
+                let ancho = self.tam_de(i).0;
+                self.mascotas[i].bicho.sal_a_avisar(ancho);
                 i
             }
         };

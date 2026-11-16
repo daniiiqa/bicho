@@ -63,11 +63,10 @@ impl App {
     }
 
     fn abre_etiqueta(&mut self, i: usize, nombre: String) {
-        let Some(output) = self
-            .output
-            .outputs()
-            .find(|o| self.output.info(o).and_then(|i| i.name) == self.monitor)
-        else {
+        let Some(output) = self.output.outputs().find(|o| {
+            self.output.info(o).and_then(|i| i.name)
+                == self.mascotas.get(i).map(|p| p.monitor.clone())
+        }) else {
             return;
         };
         let (_, w, h) = globo::etiqueta(&nombre);
@@ -101,6 +100,12 @@ impl App {
     }
 
     fn pinta_etiqueta(&mut self) {
+        // lo del monitor de su animalito
+        let Some(quien) = self.etiqueta.as_ref().map(|e| e.i) else {
+            return;
+        };
+        let pantalla = self.tam_de(quien);
+        let escala_buffer = self.mascotas.get(quien).map_or(1, |p| p.escala_buffer);
         let Some(e) = self.etiqueta.as_mut() else {
             return;
         };
@@ -117,7 +122,7 @@ impl App {
         // centrada encima de su cabeza; si no cabe arriba, abajo de él
         let cabeza = b.y - b.dy + b.ch - p.cuerpo.2;
         let centro = b.x + (p.cuerpo.0 + p.cuerpo.1) / 2.0;
-        let x = (centro - tw / 2.0).clamp(0.0, (self.pantalla.0 - tw).max(0.0));
+        let x = (centro - tw / 2.0).clamp(0.0, (pantalla.0 - tw).max(0.0));
         let y = if cabeza - th - 3.0 >= 0.0 {
             cabeza - th - 3.0
         } else {
@@ -129,14 +134,14 @@ impl App {
             e.layer.set_margin(margen.0, 0, 0, margen.1);
             e.margen = margen;
         }
-        let ahora = (p.colores, self.escala_buffer);
+        let ahora = (p.colores, escala_buffer);
         if e.pintado == Some(ahora) && e.pool.is_some() {
             if movida {
                 e.layer.commit();
             }
             return;
         }
-        let px = (px_etiqueta(self.cfg.escala) as i32 * self.escala_buffer) as usize;
+        let px = (px_etiqueta(self.cfg.escala) as i32 * escala_buffer) as usize;
         let (w, h) = ((gw * px) as i32, (gh * px) as i32);
         let mut pool = match e.pool.take() {
             Some(pool) => pool,
@@ -148,7 +153,7 @@ impl App {
         if let Ok((buffer, canvas)) = pool.create_buffer(w, h, w * 4, wl_shm::Format::Argb8888) {
             globo::pinta(&celdas, gw, &colores_etiqueta(&p.colores), px, canvas);
             let surface = e.layer.wl_surface();
-            surface.set_buffer_scale(self.escala_buffer);
+            surface.set_buffer_scale(escala_buffer);
             surface.damage_buffer(0, 0, w, h);
             if buffer.attach_to(surface).is_ok() {
                 e.layer.commit();

@@ -985,10 +985,20 @@ impl Bicho {
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
-    /// Ya está en la otra pantalla, en (x, y) de allá: sigue en lo que iba
-    /// (si quedó en el aire, cae).
-    pub fn cruza(&mut self, x: f32, y: f32) {
+    /// Ya está en la otra pantalla, en (x, y) de allá, yendo hacia `der`:
+    /// sigue en lo que iba (si quedó en el aire, cae).
+    pub fn cruza(&mut self, x: f32, y: f32, der: bool) {
         self.sale = None;
+        // su ventana se quedó en el otro monitor: ya no vive ahí
+        self.dentro = None;
+        self.de_casa = false;
+        self.oculto = false;
+        self.puesto_en = None;
+        // mirando para donde va (si no, se regresaría luego luego)
+        self.der = der;
+        if self.hace == Hace::Vuela && (self.vx > 0.0) != der {
+            self.vx = -self.vx;
+        }
         self.x = x;
         self.y = y;
         self.sobre = None;
@@ -1626,7 +1636,7 @@ mod tests {
         b.hace = Hace::Persigue;
         b.falta = 3.0;
         b.der = true;
-        b.cruza(0.0, 1200.0 - 60.0);
+        b.cruza(0.0, 1200.0 - 60.0, true);
         for _ in 0..5 {
             b.tick(0.033, &m, 1920.0, 1200.0, Some((900.0, 600.0)));
         }

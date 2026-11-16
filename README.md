@@ -72,6 +72,15 @@ cuenta un ratito antes de salir). Unas rondas y a descansar, contentos. Si
 andan michi y la baba, michi empieza correteando a la baba. No juegan
 dormidos, platicando, ni claudio con su laptop.
 
+## Varios monitores
+
+Con varios monitores se pasan de uno a otro por las orillas que se tocan:
+paseando por el piso, persiguiendo al cursor, o si los avientas para allá.
+Cada uno vive en el suyo (su propia capa en esa salida, con su escala), y
+si desconectas el monitor donde anda, regresa al de casa (donde los
+soltaste). En Linux, con Hyprland (en KDE se quedan en el suyo); en
+Windows, siempre.
+
 ## Agarrarlos
 
 Arrástralos y suéltalos: salen volando con la velocidad con que los
@@ -257,8 +266,7 @@ desperezándose. Con la barra de tareas en auto-ocultar caminan arriba de
 donde sale la barra (para que no los tape).
 
 Allá no hay (todavía): repisas en las letras de las terminales, claudio con
-Claude Code ni las demás reacciones a discada. Y en Linux, todavía no se
-cruzan de una pantalla a otra.
+Claude Code ni las demás reacciones a discada.
 
 ## Por dentro
 
