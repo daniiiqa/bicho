@@ -7,6 +7,9 @@
 //!   pose como cuadrícula de colores) y sus colores del look.
 //! - `salen.json` (lo escribe el jardín): a quién ya le tocó salir. bicho lo
 //!   saca brincando de la ventana y borra el archivo.
+//! - `entran.json` (lo escriben `bicho jardin [especie…]` y la tecla `b` del
+//!   jardín): a quiénes llamar. Los sueltos de esa especie (o nombre, o
+//!   `todos`) se meten al jardín si está abierto en su monitor.
 //!
 //! Si cierras el jardín, salen solos (su ventana ya no está). Mientras haya
 //! visitas, `visitas.json` se reescribe cada 2 s: si bicho se guarda, el
@@ -45,9 +48,42 @@ fn cuadro(e: &arte::Especie, pose: arte::Pose) -> Vec<String> {
         .collect()
 }
 
+/// `bicho jardin [especie…]`: los manda al jardín (sin nada: a todos).
+pub fn llama(quienes: &[String]) -> i32 {
+    let Some(dir) = carpeta() else { return 1 };
+    let lista: Vec<String> = if quienes.is_empty() { vec!["todos".into()] } else { quienes.to_vec() };
+    let _ = std::fs::create_dir_all(&dir);
+    match std::fs::write(dir.join("entran.json"), Value::from(lista).to_string()) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("bicho: {e}");
+            1
+        }
+    }
+}
+
 impl App {
     pub(crate) fn tick_jardin(&mut self) {
         let Some(dir) = carpeta() else { return };
+        // ¿a quiénes llaman al jardín?
+        let entran = dir.join("entran.json");
+        if let Ok(t) = std::fs::read_to_string(&entran) {
+            let _ = std::fs::remove_file(&entran);
+            let quienes: Vec<String> = serde_json::from_str(&t).unwrap_or_default();
+            let todos = quienes.iter().any(|q| q == "todos" || q == "all");
+            for i in 0..self.mascotas.len() {
+                let p = &self.mascotas[i];
+                let llamado = todos
+                    || quienes.iter().any(|q| q == p.especie.nombre || p.nombre.as_deref() == Some(q.as_str()));
+                if !llamado || p.bicho.en_jardin {
+                    continue;
+                }
+                let jardin = self.mundos.get(&p.monitor).and_then(|m| m.jardines.first()).or_else(|| self.mundo.jardines.first()).cloned();
+                if let Some(id) = jardin {
+                    self.mascotas[i].bicho.visita(id);
+                }
+            }
+        }
         // ¿a quién ya le tocó salir?
         let salen = dir.join("salen.json");
         if let Ok(t) = std::fs::read_to_string(&salen) {

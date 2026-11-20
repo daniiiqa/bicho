@@ -25,6 +25,7 @@ bicho más ESPECIE    suelta uno más
 bicho off            los guarda
 bicho toggle         una cosa o la otra
 bicho menu           el menú (jale): SUPER+Shift+B en discada
+bicho jardin [esp…]  los manda al jardín, si está abierto (sin nada: a todos)
 bicho ver            cómo se ven, en la terminal
 bicho --auto         al iniciar sesión: los suelta si el menú dice que sí
 bicho claude instala los hooks de Claude Code, para claudio (quita: los quita)
@@ -82,8 +83,12 @@ plantas, se sienta y de noche se duerme. Al rato regresa y sale brincando de
 la ventana (los que metiste tú se quedan hasta que los saques), y si cierras
 el jardín salen todos.
 
+También los puedes llamar: `bicho jardin claudio` (o sin nada, a todos), o
+la tecla `b` en el jardín.
+
 Se platican por `$XDG_RUNTIME_DIR/jardin/`: bicho escribe `visitas.json`
-(quién anda allá, con su dibujo y sus colores) y el jardín, `salen.json`.
+(quién anda allá, con su dibujo y sus colores), el jardín `salen.json`, y
+`entran.json` lo escriben `bicho jardin` y la `b`.
 Para probarlo, `BICHO_JARDIN_PRUEBA=1` hace que se metan en cuanto ven la
 ventana.
 

@@ -236,7 +236,11 @@ pub fn ventana_en(monitor: &str, x: f32, y: f32) -> Option<String> {
             gx >= cx && gx < cx + w && gy >= cy && gy < cy + h
         })
         .filter(|c| c["fullscreen"].as_i64().unwrap_or(0) == 0)
-        .min_by_key(|c| c["focusHistoryID"].as_i64().unwrap_or(i64::MAX))
+        // la de hasta arriba: las flotantes siempre van encima de las de
+        // mosaico (si no, soltarlo en el jardín, que flota, lo metía a la
+        // terminal de atrás si esa era la última enfocada); entre iguales, la
+        // enfocada más recientemente
+        .min_by_key(|c| (c["floating"].as_bool() != Some(true), c["focusHistoryID"].as_i64().unwrap_or(i64::MAX)))
         .and_then(|c| c["address"].as_str())
         .map(String::from)
 }

@@ -1181,6 +1181,16 @@ impl Bicho {
         (self.hace, self.falta) = (Hace::Vuela, 0.0);
     }
 
+    /// Lo llamaron al jardín (`bicho jardin`, o la `b` del jardín): se mete de
+    /// visita (no de casa: al rato sale solo).
+    pub fn visita(&mut self, jardin: String) {
+        self.dentro = Some(jardin);
+        self.de_casa = false;
+        self.sobre = None;
+        self.regresa_a = None;
+        self.ancla = None;
+    }
+
     /// El jardín lo dejó salir: brinca fuera de su ventana.
     pub fn sal_del_jardin(&mut self) {
         self.dentro = None;

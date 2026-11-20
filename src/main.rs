@@ -11,6 +11,7 @@
 //!   bicho toggle       una cosa o la otra (para un atajo)
 //!   bicho ver          cómo se ven, en la terminal
 //!   bicho menu         el menú (jale), SUPER+Shift+B
+//!   bicho jardin [esp] los manda al jardín (si está abierto); sin nada, a todos
 //!   bicho --auto       al iniciar sesión: los suelta si el menú dice que sí
 //!   bicho actualiza    baja el compilado nuevo de GitHub (actualiza.rs)
 //!   bicho claude instala|quita   los hooks de Claude Code, para que claudio
@@ -281,6 +282,8 @@ fn main() {
             suelta(&lista)
         }
         Some("menu") => menu::menu(),
+        #[cfg(unix)]
+        Some("jardin" | "jardín" | "garden") => jardin::llama(resto),
         // lo que corren los hooks de Claude Code
         Some("shell") => match resto.first().map(String::as_str) {
             Some("instala" | "install") => shell::instala(true),
@@ -329,7 +332,7 @@ fn main() {
 fn uso() {
     let nombres: Vec<_> = arte::todas().iter().map(|e| e.nombre).collect();
     eprintln!(
-        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu\n      bicho actualiza              (baja la versión nueva ya compilada)
+        "uso: bicho [especie…] | más ESPECIE | off | toggle | ver | menu | jardin [especie…]\n      bicho actualiza              (baja la versión nueva ya compilada)
       bicho claude instala|quita   (los hooks de Claude Code, para claudio)\n      bicho shell instala|quita    (en ~/.bashrc: se asustan si truena un comando)\nespecies: {}",
         nombres.join(", ")
     );
