@@ -7,6 +7,8 @@
 //!   pose como cuadrícula de colores) y sus colores del look.
 //! - `salen.json` (lo escribe el jardín): a quién ya le tocó salir. bicho lo
 //!   saca brincando de la ventana y borra el archivo.
+//! - `sacan.json` (lo escribe el jardín cuando le das clic a uno): sale ya,
+//!   y aparece donde tienes el cursor, cayendo con un brinquito.
 //! - `entran.json` (lo escriben `bicho jardin [especie…]` y la tecla `b` del
 //!   jardín): a quiénes llamar. Los sueltos de esa especie (o nombre, o
 //!   `todos`) se meten al jardín si está abierto en su monitor.
@@ -65,6 +67,25 @@ pub fn llama(quienes: &[String]) -> i32 {
 impl App {
     pub(crate) fn tick_jardin(&mut self) {
         let Some(dir) = carpeta() else { return };
+        // ¿a quién sacaste del jardín con el mouse? sale donde está el cursor
+        let sacan = dir.join("sacan.json");
+        if let Ok(t) = std::fs::read_to_string(&sacan) {
+            let _ = std::fs::remove_file(&sacan);
+            let ids: Vec<String> = serde_json::from_str(&t).unwrap_or_default();
+            for i in 0..self.mascotas.len() {
+                let p = &self.mascotas[i];
+                if !p.bicho.en_jardin || !ids.contains(&clave(i, p.especie)) {
+                    continue;
+                }
+                let cursor = self.cursor_de(i);
+                let b = &mut self.mascotas[i].bicho;
+                b.sal_del_jardin();
+                if let Some((cx, cy)) = cursor {
+                    b.x = cx - b.cw / 2.0;
+                    b.y = cy - b.ch * 0.6;
+                }
+            }
+        }
         // ¿a quiénes llaman al jardín?
         let entran = dir.join("entran.json");
         if let Ok(t) = std::fs::read_to_string(&entran) {
