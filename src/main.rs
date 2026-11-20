@@ -54,6 +54,8 @@ mod etiqueta;
 #[cfg(unix)]
 mod hypr;
 #[cfg(unix)]
+mod jardin;
+#[cfg(unix)]
 mod kde;
 #[cfg(unix)]
 mod menu;
@@ -730,6 +732,8 @@ struct App {
     /// el monitor donde viven (el enfocado al soltarlos)
     monitor: Option<String>,
     mascotas: Vec<Mascota>,
+    /// lo último que se escribió en las visitas del jardín (jardin.rs)
+    jardin_escrito: Option<String>,
     pantalla: (f32, f32),
     configurado: bool,
     escala_buffer: i32,
@@ -889,6 +893,8 @@ impl App {
             }
             noche = Some(es_de_noche());
             self.diagnostico();
+            // los que andan de visita en el jardín (y los que ya salen)
+            self.tick_jardin();
             let m = mtime(&colores_path());
             if m != self.colores_mtime {
                 self.colores_mtime = m;
@@ -1246,6 +1252,7 @@ fn vive(cfg: Config) -> Result<(), String> {
         cfg,
         monitor: hypr::monitor_enfocado(),
         mascotas: Vec::new(),
+        jardin_escrito: None,
         pantalla: (0.0, 0.0),
         configurado: false,
         escala_buffer: 1,

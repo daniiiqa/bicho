@@ -72,6 +72,21 @@ cuenta un ratito antes de salir). Unas rondas y a descansar, contentos. Si
 andan michi y la baba, michi empieza correteando a la baba. No juegan
 dormidos, platicando, ni claudio con su laptop.
 
+## El jardín
+
+Si andan sueltos y tienes abierto el [jardín](https://github.com/daniiiqa/jardin)
+(SUPER+Shift+J), de vez en cuando uno se mete a su ventana como a cualquier
+otra, o lo metes tú con SUPER. Ya adentro no se queda en las letras: se va a
+pasear al jardín, en 3D, con su mismo dibujo hecho de puntos. Huele las
+plantas, se sienta y de noche se duerme. Al rato regresa y sale brincando de
+la ventana (los que metiste tú se quedan hasta que los saques), y si cierras
+el jardín salen todos.
+
+Se platican por `$XDG_RUNTIME_DIR/jardin/`: bicho escribe `visitas.json`
+(quién anda allá, con su dibujo y sus colores) y el jardín, `salen.json`.
+Para probarlo, `BICHO_JARDIN_PRUEBA=1` hace que se metan en cuanto ven la
+ventana.
+
 ## Varios monitores
 
 Con varios monitores se pasan de uno a otro por las orillas que se tocan:

@@ -260,6 +260,7 @@ pub fn mundo() -> Option<Mundo> {
             todas: e.ventanas.iter().map(|v| v.id.clone()).collect(),
             clis,
             pids: e.ventanas.iter().map(|v| (v.id.clone(), v.pid)).collect(),
+            jardines: Vec::new(),
         })
     })
     .flatten()

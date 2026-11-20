@@ -28,6 +28,9 @@ pub struct Mundo {
     pub clis: Vec<String>,
     /// el pid de cada ventana (de todas): para saber en cuál anda un proceso
     pub pids: Vec<(String, i32)>,
+    /// las ventanas de jardín (el de discada): el que se mete ahí se va a
+    /// pasear al jardín (allá se dibuja en 3D) hasta que el jardín lo saque
+    pub jardines: Vec<String>,
 }
 
 /// Donde se puede parar: `y` es la del lienzo parado ahí, y `x0..x1` las x

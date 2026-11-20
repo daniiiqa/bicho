@@ -111,6 +111,8 @@ pub struct Bicho {
     pub oculto: bool,
     /// lo metiste tú (con SUPER): es de casa y no se sale solo de su ventana
     pub de_casa: bool,
+    /// anda paseando en el jardín (se metió a su ventana): aquí no se ve
+    pub en_jardin: bool,
     /// salió de su casa a avisarte algo: al acabar, regresa a esta ventana
     pub regresa_a: Option<String>,
     /// le tienes el mouse encima (para enseñar su casita)
@@ -239,6 +241,7 @@ impl Bicho {
             llamando: 0,
             aterrizajes: 0,
             de_casa: false,
+            en_jardin: false,
             regresa_a: None,
             encima: false,
             espera_repisas: 0.0,
@@ -382,6 +385,16 @@ impl Bicho {
                 self.falta = 30.0;
                 return;
             }
+        }
+        // para probar el jardín (BICHO_JARDIN_PRUEBA=1): se meten luego luego
+        if self.dentro.is_none()
+            && std::env::var_os("BICHO_JARDIN_PRUEBA").is_some()
+            && let Some(j) = m.jardines.first()
+        {
+            self.dentro = Some(j.clone());
+            self.de_casa = false;
+            self.sobre = None;
+            return;
         }
         // a veces se mete a una ventana solito: si anda arriba de ella se
         // clava para adentro; si anda en el piso, a la que le quede enfrente
@@ -538,9 +551,18 @@ impl Bicho {
                 self.dentro = None;
                 self.de_casa = false;
                 self.oculto = false;
+                self.en_jardin = false;
                 self.cae();
             }
+            // se metió al jardín: allá pasea (jardin lo dibuja) y aquí no se
+            // ve; sale cuando el jardín lo diga, o al cerrarlo
+            if m.jardines.contains(&id) {
+                self.en_jardin = true;
+                self.oculto = true;
+                return self.look();
+            }
         }
+        self.en_jardin = false;
         // la ventana donde anda (adentro o encima) se movió: él también
         let suya = self.dentro.clone().or_else(|| {
             self.sobre
@@ -1159,6 +1181,15 @@ impl Bicho {
         (self.hace, self.falta) = (Hace::Vuela, 0.0);
     }
 
+    /// El jardín lo dejó salir: brinca fuera de su ventana.
+    pub fn sal_del_jardin(&mut self) {
+        self.dentro = None;
+        self.de_casa = false;
+        self.en_jardin = false;
+        self.oculto = false;
+        self.brinquito();
+    }
+
     fn brinquito(&mut self) {
         self.vy = -260.0;
         self.vx = 0.0;
@@ -1604,6 +1635,7 @@ mod tests {
             todas: vec![],
             clis: vec![],
             pids: vec![],
+            jardines: vec![],
         }
     }
 

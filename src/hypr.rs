@@ -173,6 +173,12 @@ pub fn mundos(borde: f32) -> std::collections::HashMap<String, Mundo> {
                     h: f(&c["size"][1]),
                 })
                 .collect();
+            let jardines = lista
+                .iter()
+                .filter(|c| cuenta(c) && c["class"].as_str() == Some("jardin"))
+                .filter_map(|c| c["address"].as_str())
+                .map(String::from)
+                .collect();
             let clis = lista
                 .iter()
                 .filter(|c| cuenta(c))
@@ -191,6 +197,7 @@ pub fn mundos(borde: f32) -> std::collections::HashMap<String, Mundo> {
                     todas: todas.clone(),
                     clis,
                     pids: pids.clone(),
+                    jardines,
                 },
             ))
         })

@@ -189,8 +189,14 @@ impl App {
             todas: m.todas.clone(),
             clis: Vec::new(),
             pids: m.pids.clone(),
+            jardines: Vec::new(),
         };
         for otro in self.mundos.values() {
+            for j in &otro.jardines {
+                if !copia.jardines.contains(j) {
+                    copia.jardines.push(j.clone());
+                }
+            }
             for c in &otro.clis {
                 if !copia.clis.contains(c) {
                     copia.clis.push(c.clone());
