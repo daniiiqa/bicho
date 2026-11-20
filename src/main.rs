@@ -734,6 +734,7 @@ struct App {
     mascotas: Vec<Mascota>,
     /// lo último que se escribió en las visitas del jardín (jardin.rs)
     jardin_escrito: Option<String>,
+    jardin_cuando: Instant,
     pantalla: (f32, f32),
     configurado: bool,
     escala_buffer: i32,
@@ -1253,6 +1254,7 @@ fn vive(cfg: Config) -> Result<(), String> {
         monitor: hypr::monitor_enfocado(),
         mascotas: Vec::new(),
         jardin_escrito: None,
+        jardin_cuando: Instant::now(),
         pantalla: (0.0, 0.0),
         configurado: false,
         escala_buffer: 1,

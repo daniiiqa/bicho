@@ -8,7 +8,9 @@
 //! - `salen.json` (lo escribe el jardín): a quién ya le tocó salir. bicho lo
 //!   saca brincando de la ventana y borra el archivo.
 //!
-//! Si cierras el jardín, salen solos (su ventana ya no está).
+//! Si cierras el jardín, salen solos (su ventana ya no está). Mientras haya
+//! visitas, `visitas.json` se reescribe cada 2 s: si bicho se guarda, el
+//! jardín ve que ya no se actualiza y deja de dibujarlos.
 
 use super::*;
 
@@ -82,8 +84,14 @@ impl App {
                 })
             })
             .collect();
+        // con visitas, se reescribe cada 2 s aunque no cambie: es su latido
+        // (si bicho se guarda o truena, el jardín ve el archivo viejo y ya no
+        // los dibuja)
+        let hay = !visitas.is_empty();
         let texto = Value::Array(visitas).to_string();
-        if self.jardin_escrito.as_deref() != Some(texto.as_str()) {
+        let latido = hay && self.jardin_cuando.elapsed().as_secs_f32() > 2.0;
+        if self.jardin_escrito.as_deref() != Some(texto.as_str()) || latido {
+            self.jardin_cuando = Instant::now();
             let _ = std::fs::create_dir_all(&dir);
             let tmp = dir.join("visitas.json.tmp");
             if std::fs::write(&tmp, &texto).is_ok() {
